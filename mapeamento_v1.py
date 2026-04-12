@@ -1,3 +1,4 @@
+import unicodedata
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +9,17 @@ from collections import Counter
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import chi2
+
+
+def normalizar(texto):
+    """Remove acentos e converte para minusculas para busca tolerante."""
+    return unicodedata.normalize("NFD", str(texto)).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def buscar_tags(colunas, termo):
+    """Busca tags pelo termo, tolerante a acentos e maiusculas/minusculas."""
+    termo_n = normalizar(termo)
+    return [c for c in colunas if termo_n in normalizar(c)]
 
 # ==========================================
 # 0. CONFIGURAÇÃO E ESTADO
@@ -33,54 +45,69 @@ for k, v in defaults.items():
 # FUNÇÕES DE BACKEND
 # ==========================================
 
-# ---- Processador da Base PI AF (Célula 2) ----
+# ---- Processador da Base PI AF ----
 def preparar_base_pi(arquivo_upload):
-    """Lê o Excel bruto exportado do PI AF, extrai e limpa os nomes das tags,
-    estrutura o DataFrame com índice temporal e remove tags 100% mortas."""
+    """
+    Lê o Excel bruto do PI AF no formato:
+      Linha 0: "data" | timestamp1 | timestamp2 | ...
+      Linha 1+: caminho_completo_tag | valor1 | valor2 | ...
+
+    Retorna DataFrame com índice DatetimeIndex e colunas = nomes limpos das tags.
+    """
     try:
         if hasattr(arquivo_upload, "seek"):
             arquivo_upload.seek(0)
-        df_raw = pd.read_excel(arquivo_upload, header=0)
+        df_raw = pd.read_excel(arquivo_upload, header=None)
     except Exception as e:
         st.error(f"❌ Erro ao ler o Excel: {e}")
         return None
 
-    nomes_brutos = df_raw.iloc[:, 0].astype(str)
-    dados = df_raw.iloc[:, 1:].copy()
+    # Linha 0: col 0 = "data", cols 1+ = timestamps
+    datas = pd.to_datetime(df_raw.iloc[0, 1:].values, errors="coerce")
+
+    # Linhas 1+: col 0 = caminho da tag, cols 1+ = valores
+    nomes_brutos = df_raw.iloc[1:, 0].astype(str).tolist()
+    dados = df_raw.iloc[1:, 1:].reset_index(drop=True)
 
     def extrair_partes(caminho):
-        return [p.strip() for p in caminho.replace("\\\\", "").replace("\\", "/").replace("|", "/").split("/") if p.strip()]
+        return [p.strip() for p in
+                caminho.replace("\\\\", "").replace("\\", "/").replace("|", "/").split("/")
+                if p.strip()]
 
-    rotulos_finais = [extrair_partes(n)[-1] if extrair_partes(n) else n for n in nomes_brutos]
-    duplicados = {k for k, v in Counter(rotulos_finais).items() if v > 1}
+    # 1º passo: rótulo = último segmento do caminho
+    rotulos = [extrair_partes(n)[-1] if extrair_partes(n) else n for n in nomes_brutos]
+    duplicados = {k for k, v in Counter(rotulos).items() if v > 1}
 
     nomes_unicos = []
     for nome in nomes_brutos:
         partes = extrair_partes(nome)
         rotulo = partes[-1] if partes else nome
         if rotulo in duplicados and len(partes) >= 2:
-            nomes_unicos.append(f"{rotulo}_{re.sub(r'[^A-Za-z0-9_]', '', partes[-2])}")
+            sufixo = re.sub(r'[^A-Za-z0-9_]', '', partes[-2])
+            nomes_unicos.append(f"{rotulo}_{sufixo}")
         else:
             nomes_unicos.append(rotulo)
 
+    # 2º passo: numeração sequencial para os que ainda persistem
     ainda_dup = {k for k, v in Counter(nomes_unicos).items() if v > 1}
     if ainda_dup:
         ocorrencias = Counter()
-        novos_nomes = []
+        novos = []
         for n in nomes_unicos:
             if n in ainda_dup:
                 ocorrencias[n] += 1
-                novos_nomes.append(f"{n}_{ocorrencias[n]}")
+                novos.append(f"{n}_{ocorrencias[n]}")
             else:
-                novos_nomes.append(n)
-        nomes_unicos = novos_nomes
+                novos.append(n)
+        nomes_unicos = novos
 
-    datas = pd.to_datetime(dados.columns, errors="coerce")
-    dados_numericos = dados.apply(pd.to_numeric, errors="coerce").values.T
-    idx_datas = [d.normalize() if pd.notna(d) else pd.NaT for d in datas]
+    # Transpor: (tags × datas) → (datas × tags)
+    dados_numericos = dados.apply(pd.to_numeric, errors="coerce").values.T  # shape: (n_datas, n_tags)
 
-    df = pd.DataFrame(data=dados_numericos, index=idx_datas, columns=nomes_unicos)
+    df = pd.DataFrame(data=dados_numericos, index=datas, columns=nomes_unicos)
     df = df[df.index.notna()].sort_index()
+
+    # Remove tags 100% mortas (só zeros ou NaN)
     df = df.loc[:, ~((df == 0) | df.isna()).all(axis=0)]
     return df
 
@@ -277,55 +304,64 @@ st.sidebar.info("Monitoramento estatístico multivariado de processo.")
 if menu == "📂 1. Carga e Auditoria":
     st.title("📂 Carga e Auditoria de Sensores")
 
-    st.info(
-        "**PKL** → base já processada (gerada por este app ou pelo notebook).  \n"
-        "**XLSX** → exportação bruta do PI AF (tags nas linhas, datas nas colunas)."
-    )
+    # ----------------------------------------------------------------
+    # FLUXO A — uso normal: carregar base já processada (.pkl)
+    # ----------------------------------------------------------------
+    st.subheader("A. Carregar Base Processada (uso normal)")
+    st.caption("Arquivo .pkl gerado anteriormente por este app ou pelo notebook.")
 
-    arquivo = st.file_uploader(
-        "Arraste seu arquivo (.pkl ou .xlsx)",
-        type=["pkl", "xlsx"],
-        help="O formato é detectado automaticamente pela extensão do arquivo."
-    )
+    arq_pkl = st.file_uploader("📥 Base de sensores (.pkl)", type=["pkl"], key="uploader_pkl")
 
-    if arquivo:
-        with st.spinner("Processando base de dados..."):
+    if arq_pkl:
+        with st.spinner("Carregando base..."):
             try:
-                ext = arquivo.name.rsplit('.', 1)[-1].lower()
-                if ext == 'pkl':
-                    import pickle
-                    df = pd.read_pickle(arquivo)
-                elif ext in ('xlsx', 'xls'):
-                    # Detecta automaticamente se é exportação bruta do PI AF
-                    # (primeira coluna = nomes de tags, demais = datas)
-                    # ou uma base tabular normal (índice na col 0)
-                    df_peek = pd.read_excel(arquivo, nrows=3, header=0)
-                    arquivo.seek(0)  # reset para leitura completa
-                    primeira_col = str(df_peek.columns[0])
-                    # Heurística: se a primeira coluna parece um caminho de tag PI (contém '\' ou '|')
-                    # ou se os cabeçalhos das outras colunas parecem datas → exportação bruta
-                    outros_cols = df_peek.columns[1:]
-                    tem_datas = sum(1 for c in outros_cols if pd.notna(pd.to_datetime(str(c), errors='coerce'))) > len(outros_cols) * 0.5
-                    tem_path_pi = any(ch in primeira_col for ch in ['\\', '|', '/'])
-                    if tem_datas or tem_path_pi:
-                        df = preparar_base_pi(arquivo)
-                    else:
-                        df = pd.read_excel(arquivo, index_col=0)
-                else:
-                    st.error(f"❌ Extensão '{ext}' não suportada.")
-                    df = None
-
-                if df is not None:
-                    if not pd.api.types.is_datetime64_any_dtype(df.index):
-                        try:
-                            df.index = pd.to_datetime(df.index)
-                        except Exception:
-                            pass
-                    st.session_state['df_pi'] = df
-                    st.success(f"✅ Base carregada: **{df.shape[0]}** instantes × **{df.shape[1]}** tags.")
-                    st.dataframe(df.head(5), use_container_width=True)
+                df = pd.read_pickle(arq_pkl)
+                if not pd.api.types.is_datetime64_any_dtype(df.index):
+                    df.index = pd.to_datetime(df.index, errors="coerce")
+                st.session_state["df_pi"] = df
+                st.success(f"✅ Base carregada: **{df.shape[0]}** instantes × **{df.shape[1]}** tags.")
+                st.dataframe(df.head(5), use_container_width=True)
             except Exception as e:
-                st.error(f"❌ Erro ao carregar arquivo: {e}")
+                st.error(f"❌ Erro ao carregar PKL: {e}")
+
+    st.divider()
+
+    # ----------------------------------------------------------------
+    # FLUXO B — base nova: processar XLSX bruto do PI AF e baixar pkl
+    # ----------------------------------------------------------------
+    with st.expander("🔄 Processar Nova Base Bruta do PI AF (.xlsx → .pkl)", expanded=False):
+        st.caption(
+            "Use quando receber uma exportação nova do PI AF.  \n"
+            "Formato esperado: linha 0 = timestamps, linhas 1+ = caminhos completos das tags."
+        )
+        arq_xlsx = st.file_uploader("📥 Exportação bruta do PI AF (.xlsx)", type=["xlsx"], key="uploader_xlsx")
+
+        if arq_xlsx:
+            with st.spinner("Processando exportação do PI AF (pode demorar alguns segundos)..."):
+                df_novo = preparar_base_pi(arq_xlsx)
+
+            if df_novo is not None:
+                st.success(f"✅ Processamento concluído: **{df_novo.shape[0]}** instantes × **{df_novo.shape[1]}** tags ativas.")
+                st.dataframe(df_novo.head(5), use_container_width=True)
+
+                # Download do pkl gerado
+                import io, pickle
+                buf = io.BytesIO()
+                pickle.dump(df_novo, buf, protocol=4)
+                buf.seek(0)
+                nome_saida = arq_xlsx.name.replace(".xlsx", "_limpa.pkl").replace(".XLSX", "_limpa.pkl")
+                st.download_button(
+                    label="⬇️ Baixar base_pi_limpa.pkl",
+                    data=buf,
+                    file_name=nome_saida,
+                    mime="application/octet-stream",
+                    help="Salve este arquivo. Na próxima vez, carregue-o diretamente no Fluxo A."
+                )
+
+                if st.button("▶️ Usar esta base agora (sem baixar)"):
+                    st.session_state["df_pi"] = df_novo
+                    st.success("Base carregada na sessão atual!")
+                    st.rerun()
 
     st.divider()
 
@@ -423,13 +459,20 @@ elif menu == "🧹 2. Limpeza Heurística":
 
     df_base = st.session_state['df_pi']
 
+    # Valida se o arquivo carregado é realmente uma base de sensores
+    cols_numericas = df_base.select_dtypes(include=[np.number]).columns.tolist()
+    if len(cols_numericas) == 0:
+        st.error("❌ O arquivo carregado não parece ser uma base de sensores (nenhuma coluna numérica encontrada).")
+        st.info("💡 Certifique-se de carregar a **base de dados PI** no Módulo 1, não a lista de indicadores.")
+        st.stop()
+
     # ---- A. Limites específicos por variável ----
     st.subheader("A. Limites Específicos por Variável (Memória de Limites)")
 
     with st.expander("➕ Adicionar / Gerenciar Regras de Limite", expanded=False):
         termo_lim = st.text_input("Buscar variável (ex: pressao, TG11):", key="busca_limites")
         if termo_lim:
-            cols_enc = [c for c in df_base.columns if termo_lim.lower() in str(c).lower()]
+            cols_enc = buscar_tags(df_base.columns, termo_lim)
             if cols_enc:
                 tags_sel = st.multiselect("Tags encontradas:", cols_enc, key="tags_lim_sel")
                 cA, cB = st.columns(2)
@@ -590,7 +633,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     termo_tag = st.text_input("Buscar tags (ex: Potencia, TG11):", key="busca_tags_mapeamento")
     if termo_tag:
         cols_enc = [c for c in df_base.columns
-                    if termo_tag.lower() in str(c).lower()
+                    if normalizar(termo_tag) in normalizar(c)
                     and ((df_base[c].isna().sum() + (df_base[c] == 0).sum()) / len(df_base)) < 0.99]
         tags_sel = st.multiselect("Tags encontradas (selecione na ordem da fórmula):", cols_enc,
                                   default=[t for t in tags_default if t in cols_enc],
@@ -779,7 +822,7 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
             if not termo_pca:
                 st.error("Digite um termo de busca.")
             else:
-                cols_pca = [c for c in df_avancado.columns if termo_pca.lower() in str(c).lower()]
+                cols_pca = buscar_tags(df_avancado.columns, termo_pca)
                 if len(cols_pca) < 2:
                     st.error(f"Encontrado apenas {len(cols_pca)} tag(s) com '{termo_pca}'. PCA precisa de ao menos 2.")
                 else:
@@ -844,7 +887,7 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
             if not termo_t2:
                 st.error("Digite um termo de busca.")
             else:
-                cols_t2 = [c for c in df_avancado.columns if termo_t2.lower() in str(c).lower()]
+                cols_t2 = buscar_tags(df_avancado.columns, termo_t2)
                 if len(cols_t2) < 2:
                     st.error("O T² exige ao menos 2 variáveis. Tente uma busca mais ampla.")
                 else:
