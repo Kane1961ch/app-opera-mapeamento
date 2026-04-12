@@ -21,19 +21,37 @@ if 'mapeamento' not in st.session_state: st.session_state['mapeamento'] = []
 # ==========================================
 def limpar_dados(df, remover_zeros, remover_negativos, outlier_metodo, fator):
     df_res = df.copy()
-    if remover_zeros:
-        df_res = df_res.mask(np.isclose(df_res, 0, atol=1e-5))
-    if remover_negativos:
-        df_res = df_res.mask(df_res < 0)
 
-    if outlier_metodo == "IQR":
-        q1 = df_res.quantile(0.25)
-        q3 = df_res.quantile(0.75)
-        iqr = q3 - q1
-        df_res = df_res.mask((df_res < (q1 - fator * iqr)) | (df_res > (q3 + fator * iqr)))
-    elif outlier_metodo == "Z-Score":
-        z_scores = (df_res - df_res.mean()) / df_res.std()
-        df_res = df_res.mask(z_scores.abs() > fator)
+    # 1. Garante que todas as colunas que podem ser números virem números de fato
+    df_res = df_res.apply(pd.to_numeric, errors='ignore')
+    
+    # 2. Separa APENAS as colunas que são números (ignora textos para não dar erro matemático)
+    cols_num = df_res.select_dtypes(include=[np.number]).columns
+    
+    if len(cols_num) > 0:
+        df_calc = df_res[cols_num].copy()
+
+        # Substitui zeros e negativos por NaN (vazio) de forma super segura
+        if remover_zeros:
+            df_calc = df_calc.mask(df_calc.abs() < 1e-5)
+        if remover_negativos:
+            df_calc = df_calc.mask(df_calc < 0)
+
+        # Filtro de Outliers
+        if outlier_metodo == "IQR":
+            q1 = df_calc.quantile(0.25)
+            q3 = df_calc.quantile(0.75)
+            iqr = q3 - q1
+            df_calc = df_calc.mask((df_calc < (q1 - fator * iqr)) | (df_calc > (q3 + fator * iqr)))
+        elif outlier_metodo == "Z-Score":
+            z_scores = (df_calc - df_calc.mean()) / df_calc.std()
+            df_calc = df_calc.mask(z_scores.abs() > fator)
+
+        # Devolve as colunas limpas para o dataframe principal
+        df_res[cols_num] = df_calc
+
+    # Preenchimento inteligente (Forward e Backward Fill) para tampar os buracos
+    return df_res.ffill().bfill()
 
     return df_res.ffill().bfill()
 
