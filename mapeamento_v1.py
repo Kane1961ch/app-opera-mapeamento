@@ -776,68 +776,73 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     col_info1.info(f"**Descrição:** {item_edit.get('descricao', '—')}")
     col_info2.info(f"**Fórmula:** `{item_edit.get('formula', '—')}`")
 
-    # --- Estado persistente da busca de tags ---
-    if 'map_cols_encontradas' not in st.session_state:
-        st.session_state['map_cols_encontradas'] = []
-    if 'map_termo_atual' not in st.session_state:
-        st.session_state['map_termo_atual'] = ""
-    if 'map_tags_acumuladas' not in st.session_state:
-        st.session_state['map_tags_acumuladas'] = []
+    # Chaves de estado com namespace por indicador — evita colisão entre rerenders
+    k_cols = f"_map_cols_{nome_edit}"
+    k_termo = f"_map_termo_{nome_edit}"
+    k_tags = f"_map_tags_{nome_edit}"
 
-    # Ao trocar de indicador, pré-carrega as tags já salvas
-    if st.session_state.get('_map_ind_anterior') != nome_edit:
-        st.session_state['map_tags_acumuladas'] = list(item_edit.get('tags', []))
-        st.session_state['map_cols_encontradas'] = []
-        st.session_state['map_termo_atual'] = ""
-        st.session_state['_map_ind_anterior'] = nome_edit
+    # Inicializa estado para este indicador se ainda não existe
+    if k_cols not in st.session_state:
+        st.session_state[k_cols] = []
+    if k_termo not in st.session_state:
+        st.session_state[k_termo] = ""
+    if k_tags not in st.session_state:
+        # Pré-carrega tags já salvas neste indicador
+        st.session_state[k_tags] = list(item_edit.get('tags', []))
 
     st.caption("💡 Busque e selecione as tags na ordem das variáveis da fórmula. Pode buscar várias vezes para acumular.")
 
     col_t1, col_t2 = st.columns([4, 1])
     termo_tag = col_t1.text_input(
         "Buscar tags (ex: Potencia, AberturaIGV, TG11):",
-        key="busca_tags_mapeamento",
+        key=f"busca_tags_{nome_edit}",
         placeholder="Digite e clique em Buscar →"
     )
     col_t2.write("")
     col_t2.write("")
-    if col_t2.button("🔍 Buscar", key="btn_busca_map"):
+    if col_t2.button("🔍 Buscar", key=f"btn_busca_{nome_edit}"):
         if termo_tag:
             encontradas = [c for c in df_base.columns
                            if normalizar(termo_tag) in normalizar(c)
                            and ((df_base[c].isna().sum() + (df_base[c] == 0).sum()) / len(df_base)) < 0.99]
-            st.session_state['map_cols_encontradas'] = encontradas
-            st.session_state['map_termo_atual'] = termo_tag
+            st.session_state[k_cols] = encontradas
+            st.session_state[k_termo] = termo_tag
+        else:
+            st.session_state[k_cols] = []
 
-    cols_enc = st.session_state['map_cols_encontradas']
+    cols_enc = st.session_state[k_cols]
     if cols_enc:
-        st.caption("✅ " + str(len(cols_enc)) + ' tag(s) para "' + st.session_state["map_termo_atual"] + '" — selecione e clique em Adicionar')
+        st.caption("✅ " + str(len(cols_enc)) + ' tag(s) para "' + st.session_state[k_termo] + '" — selecione e clique em Adicionar')
         selecionadas_agora = st.multiselect(
             "Tags encontradas:",
             cols_enc,
-            key="tags_mapeamento_sel"
+            key=f"tags_enc_{nome_edit}"
         )
-        if st.button("➕ Adicionar à seleção", key="btn_add_tags"):
+        if st.button("➕ Adicionar à seleção", key=f"btn_add_{nome_edit}"):
             for t in selecionadas_agora:
-                if t not in st.session_state['map_tags_acumuladas']:
-                    st.session_state['map_tags_acumuladas'].append(t)
-            st.session_state['map_cols_encontradas'] = []
+                if t not in st.session_state[k_tags]:
+                    st.session_state[k_tags].append(t)
+            st.session_state[k_cols] = []
             st.rerun()
-    elif st.session_state["map_termo_atual"] and not cols_enc:
-        st.warning("Nenhuma tag encontrada para " + repr(st.session_state["map_termo_atual"]) + ". Tente outro termo.")
+    elif st.session_state[k_termo] and not cols_enc:
+        st.warning("Nenhuma tag encontrada para " + repr(st.session_state[k_termo]) + ". Tente outro termo.")
 
-    # Tags acumuladas
+    # Tags acumuladas — fonte de verdade é k_tags
+    tags_atuais = st.session_state[k_tags]
     tags_sel = st.multiselect(
         "🗂️ Tags vinculadas a este indicador (reordene se necessário):",
-        options=st.session_state['map_tags_acumuladas'],
-        default=st.session_state['map_tags_acumuladas'],
-        key="tags_mapeamento_final"
+        options=tags_atuais,
+        default=tags_atuais,
+        key=f"tags_final_{nome_edit}"
     )
-    if tags_sel != st.session_state['map_tags_acumuladas']:
-        st.session_state['map_tags_acumuladas'] = tags_sel
-    if st.session_state['map_tags_acumuladas']:
-        if st.button("🗑️ Limpar tags", key="btn_clear_tags"):
-            st.session_state['map_tags_acumuladas'] = []
+    # Sincroniza remoções feitas no multiselect de volta para k_tags
+    if set(tags_sel) != set(tags_atuais) or tags_sel != tags_atuais:
+        st.session_state[k_tags] = tags_sel
+        st.rerun()
+
+    if tags_atuais:
+        if st.button("🗑️ Limpar tags", key=f"btn_clear_{nome_edit}"):
+            st.session_state[k_tags] = []
             st.rerun()
 
     col_btn1, col_btn2 = st.columns([1, 4])
@@ -850,10 +855,11 @@ elif menu == "📝 3. Mapeamento de Indicadores":
             st.rerun()
 
     if salvar:
-        if not tags_sel:
-            st.error("Selecione ao menos uma tag.")
+        tags_para_salvar = st.session_state.get(k_tags, [])
+        if not tags_para_salvar:
+            st.error("Selecione ao menos uma tag antes de salvar.")
         else:
-            st.session_state['mapeamento'][nome_edit]['tags'] = tags_sel
+            st.session_state['mapeamento'][nome_edit]['tags'] = tags_para_salvar
             st.success(f"✅ Tags do indicador '{nome_edit}' salvas!")
             # Avança automaticamente para o próximo indicador pendente
             pendentes = [n for n, v in st.session_state['mapeamento'].items() if not v.get('tags')]
