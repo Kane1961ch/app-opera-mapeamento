@@ -685,20 +685,35 @@ elif menu == "📝 3. Mapeamento de Indicadores":
         # Botão fora do bloco `if arquivo_ind` para funcionar mesmo após rerender
         if st.session_state.get('_lista_importada'):
             n = len(st.session_state['_lista_importada'])
-            if st.button(f"✅ Carregar {n} indicadores no mapeamento", key="btn_precarregar"):
-                carregados = 0
+            col_load1, col_load2 = st.columns(2)
+            with col_load1:
+                btn_carregar = st.button(f"✅ Carregar {n} indicadores (preserva tags já salvas)", key="btn_precarregar")
+            with col_load2:
+                btn_recarregar = st.button(f"🔄 Recarregar do zero (apaga tags)", key="btn_recarregar")
+
+            if btn_carregar or btn_recarregar:
                 for item in st.session_state['_lista_importada']:
                     chave = item['sigla']
-                    if chave not in st.session_state['mapeamento']:
-                        st.session_state['mapeamento'][chave] = {
-                            'descricao': item['descricao'],
-                            'formula':   item['formula'],
-                            'tags':      []
-                        }
-                        carregados += 1
+                    # Sempre atualiza sigla/descrição/fórmula com os dados novos da planilha
+                    # Preserva tags já mapeadas apenas no btn_carregar
+                    tags_existentes = st.session_state['mapeamento'].get(chave, {}).get('tags', [])
+                    st.session_state['mapeamento'][chave] = {
+                        'descricao': item['descricao'],
+                        'formula':   item['formula'],
+                        'tags':      [] if btn_recarregar else tags_existentes
+                    }
                 st.session_state['_lista_importada'] = []
-                st.success(f"✅ {carregados} indicador(es) carregado(s)! Complete as tags abaixo.")
+                st.success(f"✅ {n} indicador(es) carregado(s) com sucesso!")
                 st.rerun()
+
+    # Normaliza dados antigos no mapeamento (garante que todos têm 'descricao' e 'formula' separados)
+    for _chave, _item in st.session_state['mapeamento'].items():
+        if 'descricao' not in _item:
+            _item['descricao'] = ''
+        if 'formula' not in _item and 'formula_bruta' in _item:
+            _item['formula'] = _item.pop('formula_bruta')
+        if 'tags' not in _item:
+            _item['tags'] = []
 
     st.divider()
 
