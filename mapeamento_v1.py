@@ -157,11 +157,34 @@ if menu == "📂 1. Carga e Auditoria":
             # 2. Dados clonados (100% idênticos)
             st.markdown("**2️⃣ Dados Clonados (Histórico 100% Idêntico)**")
             try:
-                mascara_dados = df_audit.T.duplicated(keep='first')
-                tags_clonadas = df_audit.columns[mascara_dados].tolist()
+                mascara_original = ~df_audit.T.duplicated(keep='first')
+                mascara_clone    =  df_audit.T.duplicated(keep='first')
+                tags_clonadas = df_audit.columns[mascara_clone].tolist()
+
                 if tags_clonadas:
-                    st.warning(f"🚨 {len(tags_clonadas)} variáveis são cópias exatas.")
-                    st.write(tags_clonadas[:10])
+                    st.warning(f"🚨 {len(tags_clonadas)} variável(is) são cópias exatas de outro sensor.")
+
+                    # Para cada clone, identifica o original correspondente
+                    rows_clone = []
+                    for clone in tags_clonadas:
+                        # Compara com todas as tags originais para achar a fonte
+                        for orig in df_audit.columns[mascara_original]:
+                            if df_audit[clone].equals(df_audit[orig]):
+                                rows_clone.append({"Original (manter)": orig, "Clone (remover)": clone})
+                                break
+                        else:
+                            rows_clone.append({"Original (manter)": "—", "Clone (remover)": clone})
+
+                    st.dataframe(pd.DataFrame(rows_clone), use_container_width=True, hide_index=True)
+
+                    # Adiciona clones à lista de remoção
+                    if tags_clonadas not in [st.session_state.get('lixo_para_remover', [])]:
+                        if st.button("🗑️ Marcar clones para remoção", key="btn_marcar_clones"):
+                            st.session_state['lixo_para_remover'] = list(
+                                set(st.session_state.get('lixo_para_remover', []) + tags_clonadas)
+                            )
+                            st.success(f"{len(tags_clonadas)} clone(s) marcado(s) para remoção.")
+                            st.rerun()
                 else:
                     st.success("✅ Nenhum sensor com dados perfeitamente clonados.")
             except MemoryError:
