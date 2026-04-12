@@ -280,7 +280,8 @@ elif menu == "🧹 2. Limpeza Heurística":
         cols_enc = st.session_state['lim_cols_encontradas']
         if cols_enc:
             termo_atual = st.session_state["lim_termo_atual"]
-            st.caption("✅ " + str(len(cols_enc)) + ' tag(s) encontrada(s) para "' + termo_atual + '"')
+            termo_atual_pca = st.session_state["_pca_termo"]
+            st.caption(f"\u2705 {len(cols_pca_encontradas)} tag(s) encontrada(s) para \"{termo_atual_pca}\"")
             tags_sel = st.multiselect("2. Selecionar tags:", cols_enc, key="tags_lim_sel")
             if tags_sel:
                 cA, cB = st.columns(2)
@@ -861,19 +862,51 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
     with tab1:
         st.subheader("Análise de Componentes Principais (PCA)")
 
-        termo_pca = st.text_input("Filtrar tags para PCA (ex: TG11, Vazao):", key="pca_input")
+        # Estado persistente da busca PCA
+        if '_pca_cols' not in st.session_state:
+            st.session_state['_pca_cols'] = []
+        if '_pca_termo' not in st.session_state:
+            st.session_state['_pca_termo'] = ""
+
+        col_p1, col_p2 = st.columns([4, 1])
+        termo_pca = col_p1.text_input("Filtrar tags para PCA (ex: TG11, Vazao):", key="pca_input",
+                                       placeholder="Digite e clique em Buscar →")
+        col_p2.write("")
+        col_p2.write("")
+        if col_p2.button("🔍 Buscar", key="btn_pca_buscar"):
+            if termo_pca:
+                encontradas = buscar_tags(df_avancado.columns, termo_pca)
+                st.session_state['_pca_cols'] = encontradas
+                st.session_state['_pca_termo'] = termo_pca
+            else:
+                st.session_state['_pca_cols'] = []
+
+        cols_pca_encontradas = st.session_state['_pca_cols']
+        if cols_pca_encontradas:
+            termo_atual_pca = st.session_state["_pca_termo"]
+            st.caption(f"\u2705 {len(cols_pca_encontradas)} tag(s) encontrada(s) para \"{termo_atual_pca}\"")
+            cols_pca_sel = st.multiselect(
+                "Tags para o PCA (desmarque as que não quer incluir):",
+                cols_pca_encontradas,
+                default=cols_pca_encontradas,
+                key="pca_multisel"
+            )
+        elif st.session_state['_pca_termo']:
+            st.warning("Nenhuma tag encontrada para \"" + st.session_state["_pca_termo"] + "\". Tente outro termo.")
+            cols_pca_sel = []
+        else:
+            cols_pca_sel = []
+
         n_top = st.number_input("Top N sensores nos Loadings:", min_value=5, max_value=50, value=10, key="pca_top")
 
         if st.button("🚀 Processar PCA", key="btn_pca"):
-            if not termo_pca:
-                st.error("Digite um termo de busca.")
+            if not cols_pca_sel:
+                st.error("Busque e selecione as tags antes de processar.")
+            elif len(cols_pca_sel) < 2:
+                st.error(f"PCA precisa de ao menos 2 tags. Selecione mais.")
             else:
-                cols_pca = buscar_tags(df_avancado.columns, termo_pca)
-                if len(cols_pca) < 2:
-                    st.error(f"Encontrado apenas {len(cols_pca)} tag(s) com '{termo_pca}'. PCA precisa de ao menos 2.")
-                else:
-                    st.info(f"✅ {len(cols_pca)} tags encontradas.")
-                    with st.spinner("Calculando PCA..."):
+                cols_pca = cols_pca_sel
+                with st.spinner("Calculando PCA..."):
                         pca, pca_data, df_pca = executar_pca(df_avancado, cols_pca)
                         var_exp = pca.explained_variance_ratio_ * 100
                         cum_var = np.cumsum(var_exp)
@@ -926,85 +959,119 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
     with tab2:
         st.subheader("Carta T² de Hotelling (Controle Multivariado)")
 
-        termo_t2 = st.text_input("Agrupar sensores para T² (ex: Turbina, TG11):", key="t2_input")
+        # Estado persistente da busca T²
+        if '_t2_cols' not in st.session_state:
+            st.session_state['_t2_cols'] = []
+        if '_t2_termo' not in st.session_state:
+            st.session_state['_t2_termo'] = ""
+
+        col_t1, col_t2b = st.columns([4, 1])
+        termo_t2 = col_t1.text_input("Agrupar sensores para T² (ex: Turbina, TG11):", key="t2_input",
+                                      placeholder="Digite e clique em Buscar →")
+        col_t2b.write("")
+        col_t2b.write("")
+        if col_t2b.button("🔍 Buscar", key="btn_t2_buscar"):
+            if termo_t2:
+                encontradas = buscar_tags(df_avancado.columns, termo_t2)
+                st.session_state['_t2_cols'] = encontradas
+                st.session_state['_t2_termo'] = termo_t2
+            else:
+                st.session_state['_t2_cols'] = []
+
+        cols_t2_encontradas = st.session_state['_t2_cols']
+        if cols_t2_encontradas:
+            termo_atual_t2 = st.session_state["_t2_termo"]
+            st.caption(f"\u2705 {len(cols_t2_encontradas)} tag(s) encontrada(s) para \"{termo_atual_t2}\"")
+            cols_t2_sel = st.multiselect(
+                "Tags para o T² (desmarque as que não quer incluir):",
+                cols_t2_encontradas,
+                default=cols_t2_encontradas,
+                key="t2_multisel"
+            )
+        elif st.session_state['_t2_termo']:
+            st.warning("Nenhuma tag encontrada para \"" + st.session_state["_t2_termo"] + "\". Tente outro termo.")
+            cols_t2_sel = []
+        else:
+            cols_t2_sel = []
+
         confianca = st.slider("Confiança Estatística", 0.90, 0.999, 0.99, 0.001, key="t2_conf")
 
         if st.button("🚀 Calcular Carta T²", key="btn_t2"):
-            if not termo_t2:
-                st.error("Digite um termo de busca.")
+            if not cols_t2_sel:
+                st.error("Busque e selecione as tags antes de calcular.")
+            elif len(cols_t2_sel) < 2:
+                st.error("O T² exige ao menos 2 variáveis.")
             else:
-                cols_t2 = buscar_tags(df_avancado.columns, termo_t2)
-                if len(cols_t2) < 2:
-                    st.error("O T² exige ao menos 2 variáveis. Tente uma busca mais ampla.")
-                else:
-                    st.info(f"✅ {len(cols_t2)} tags encontradas.")
-                    with st.spinner("Calculando Covariância..."):
+                cols_t2 = cols_t2_sel
+                with st.spinner("Calculando Covariância..."):
+                    try:
                         t2_valores, lsc_t2, df_clean, var_principal = calcular_t2(df_avancado, cols_t2, confianca)
+                    except ValueError as e:
+                        st.error(f"❌ {e}")
+                        t2_valores = None
 
-                        if t2_valores is None:
-                            st.error(f"❌ {var_principal}")  # var_principal = msg de erro aqui
-                        else:
-                            p = df_clean.shape[1]
-                            n = df_clean.shape[0]
+                if t2_valores is not None:
+                    p = df_clean.shape[1]
+                    n = df_clean.shape[0]
 
-                            # Carta Univariada (variável mais instável)
-                            serie_uni = df_clean[var_principal]
-                            media_uni = serie_uni.mean()
-                            desvio_uni = serie_uni.std()
-                            lsc_uni = media_uni + 3 * desvio_uni
-                            lic_uni = media_uni - 3 * desvio_uni
+                    # Carta Univariada (variável mais instável)
+                    serie_uni = df_clean[var_principal]
+                    media_uni = serie_uni.mean()
+                    desvio_uni = serie_uni.std()
+                    lsc_uni = media_uni + 3 * desvio_uni
+                    lic_uni = media_uni - 3 * desvio_uni
 
-                            tempo = df_clean.index if pd.api.types.is_datetime64_any_dtype(df_clean.index) \
-                                else range(n)
+                    tempo = df_clean.index if pd.api.types.is_datetime64_any_dtype(df_clean.index) \
+                        else range(n)
 
-                            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
+                    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
 
-                            # Univariada
-                            ax1.plot(tempo, serie_uni.values, color='#1f77b4', alpha=0.8, linewidth=1.2, label='Sinal Real')
-                            ax1.axhline(media_uni, color='green', label=f'Média ({media_uni:.2f})')
-                            ax1.axhline(lsc_uni, color='red', linestyle='--', label='LSC (+3σ)')
-                            ax1.axhline(lic_uni, color='red', linestyle='--', label='LIC (-3σ)')
-                            falhas_uni = serie_uni[(serie_uni > lsc_uni) | (serie_uni < lic_uni)]
-                            ax1.scatter(falhas_uni.index, falhas_uni.values, color='red', s=20, zorder=5)
-                            ax1.set_title(f"Carta Univariada: {var_principal}", fontweight='bold')
-                            ax1.set_ylabel("Valor")
-                            ax1.legend(loc='upper right', fontsize=9)
-                            ax1.grid(True, alpha=0.3)
+                    # Univariada
+                    ax1.plot(tempo, serie_uni.values, color='#1f77b4', alpha=0.8, linewidth=1.2, label='Sinal Real')
+                    ax1.axhline(media_uni, color='green', label=f'Média ({media_uni:.2f})')
+                    ax1.axhline(lsc_uni, color='red', linestyle='--', label='LSC (+3σ)')
+                    ax1.axhline(lic_uni, color='red', linestyle='--', label='LIC (-3σ)')
+                    falhas_uni = serie_uni[(serie_uni > lsc_uni) | (serie_uni < lic_uni)]
+                    ax1.scatter(falhas_uni.index, falhas_uni.values, color='red', s=20, zorder=5)
+                    ax1.set_title(f"Carta Univariada: {var_principal}", fontweight='bold')
+                    ax1.set_ylabel("Valor")
+                    ax1.legend(loc='upper right', fontsize=9)
+                    ax1.grid(True, alpha=0.3)
 
-                            # T²
-                            t2_serie = pd.Series(t2_valores, index=df_clean.index)
-                            ax2.plot(tempo, t2_valores, color='purple', alpha=0.8, linewidth=1.2, label='Índice T²')
-                            ax2.axhline(lsc_t2, color='red', linewidth=2,
-                                        label=f'LSC Hotelling ({confianca * 100:.1f}%: {lsc_t2:.2f})')
-                            falhas_t2 = t2_serie[t2_serie > lsc_t2]
-                            ax2.scatter(falhas_t2.index, falhas_t2.values, color='red', s=20, zorder=5)
-                            ax2.set_title(f"T² de Hotelling — {p} variáveis", fontweight='bold')
-                            ax2.set_ylabel("T²")
-                            ax2.set_xlabel("Evolução Temporal")
-                            ax2.legend(loc='upper right', fontsize=9)
-                            ax2.grid(True, alpha=0.3)
+                    # T²
+                    t2_serie = pd.Series(t2_valores, index=df_clean.index)
+                    ax2.plot(tempo, t2_valores, color='purple', alpha=0.8, linewidth=1.2, label='Índice T²')
+                    ax2.axhline(lsc_t2, color='red', linewidth=2,
+                                label=f'LSC Hotelling ({confianca * 100:.1f}%: {lsc_t2:.2f})')
+                    falhas_t2 = t2_serie[t2_serie > lsc_t2]
+                    ax2.scatter(falhas_t2.index, falhas_t2.values, color='red', s=20, zorder=5)
+                    ax2.set_title(f"T² de Hotelling — {p} variáveis", fontweight='bold')
+                    ax2.set_ylabel("T²")
+                    ax2.set_xlabel("Evolução Temporal")
+                    ax2.legend(loc='upper right', fontsize=9)
+                    ax2.grid(True, alpha=0.3)
 
-                            plt.tight_layout()
-                            st.pyplot(fig)
-                            plt.close(fig)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
 
-                            # Relatório de Alarmes
-                            pct_uni = len(falhas_uni) / n * 100
-                            pct_t2 = len(falhas_t2) / n * 100
+                    # Relatório de Alarmes
+                    pct_uni = len(falhas_uni) / n * 100
+                    pct_t2 = len(falhas_t2) / n * 100
 
-                            st.divider()
-                            st.markdown("### 📊 Relatório de Alarmes: Univariado vs Multivariado")
-                            cA, cB = st.columns(2)
-                            cA.metric(f"Alarme Univariado ({var_principal[:20]}...)",
-                                      f"{len(falhas_uni)} anomalias", f"{pct_uni:.2f}%")
-                            cB.metric("Alarme Multivariado (T² Hotelling)",
-                                      f"{len(falhas_t2)} anomalias", f"{pct_t2:.2f}%")
+                    st.divider()
+                    st.markdown("### 📊 Relatório de Alarmes: Univariado vs Multivariado")
+                    cA, cB = st.columns(2)
+                    cA.metric(f"Alarme Univariado ({var_principal[:20]}...)",
+                              f"{len(falhas_uni)} anomalias", f"{pct_uni:.2f}%")
+                    cB.metric("Alarme Multivariado (T² Hotelling)",
+                              f"{len(falhas_t2)} anomalias", f"{pct_t2:.2f}%")
 
-                            if pct_t2 > pct_uni:
-                                st.warning("⚠️ **DIAGNÓSTICO:** O T² encontrou falhas **ocultas**! "
-                                           "A relação física entre as variáveis quebrou sem que nenhuma isolada disparasse alarme.")
-                            elif pct_t2 < pct_uni:
-                                st.success("✅ **DIAGNÓSTICO:** O T² filtrou **falsos positivos**! "
-                                           "Uma mudança de carga acionou o alarme univariado, mas a física do conjunto foi respeitada.")
-                            else:
-                                st.info("ℹ️ Alarmes univariado e multivariado estão alinhados.")
+                    if pct_t2 > pct_uni:
+                        st.warning("⚠️ **DIAGNÓSTICO:** O T² encontrou falhas **ocultas**! "
+                                   "A relação física entre as variáveis quebrou sem que nenhuma isolada disparasse alarme.")
+                    elif pct_t2 < pct_uni:
+                        st.success("✅ **DIAGNÓSTICO:** O T² filtrou **falsos positivos**! "
+                                   "Uma mudança de carga acionou o alarme univariado, mas a física do conjunto foi respeitada.")
+                    else:
+                        st.info("ℹ️ Alarmes univariado e multivariado estão alinhados.")
