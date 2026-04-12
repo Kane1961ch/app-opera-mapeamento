@@ -105,17 +105,37 @@ if menu == "📂 1. Carga e Auditoria":
         st.subheader("🕵️ Auditoria de Redundância (Sensores Clonados)")
         if st.button("Executar Auditoria de Clones"):
             with st.spinner("Cruzando correlações..."):
-                corr = df.select_dtypes(include=[np.number]).corr().abs()
+                # Pega apenas os números para evitar erros com colunas de texto
+                df_num = df.select_dtypes(include=[np.number])
+                corr = df_num.corr().abs()
                 upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
-                clones = [(col, row, upper.loc[row, col]) for col in upper.columns for row in upper.index if
-                          upper.loc[row, col] > 0.99]
+                clones = [(col, row, upper.loc[row, col]) for col in upper.columns for row in upper.index if upper.loc[row, col] > 0.99]
 
                 if clones:
                     st.error(f"🚨 Detectados {len(clones)} pares de sensores redundantes!")
-                    st.dataframe(pd.DataFrame(clones, columns=["Sensor A", "Sensor B", "Correlação"]).sort_values(
-                        by="Correlação", ascending=False))
+                    st.dataframe(pd.DataFrame(clones, columns=["Sensor A (Manter)", "Sensor B (Remover)", "Correlação"]).sort_values(by="Correlação", ascending=False))
+                    
+                    # Salva a lista de sensores ruins na memória
+                    st.session_state['lixo_para_remover'] = list(set([c[1] for c in clones]))
                 else:
                     st.success("✅ Base saudável! Nenhum sensor clonado detectado.")
+                    
+        # TRAVA DE SEGURANÇA: Só mostra a opção de apagar se houver lixo na memória
+        if 'lixo_para_remover' in st.session_state and st.session_state['lixo_para_remover']:
+            st.warning("⚠️ Recomendamos remover os clones (Sensor B) para evitar erros matemáticos no PCA e T².")
+            
+            # A caixinha de confirmação (Checkbox)
+            confirmar = st.checkbox("Estou ciente e confirmo que desejo remover estes sensores da base de dados.")
+            
+            # O botão só aparece se a caixinha for marcada
+            if confirmar:
+                if st.button("🗑️ Apagar Sensores Selecionados"):
+                    st.session_state['df_pi'] = st.session_state['df_pi'].drop(columns=st.session_state['lixo_para_remover'], errors='ignore')
+                    st.success(f"✅ {len(st.session_state['lixo_para_remover'])} sensores redundantes foram apagados com sucesso!")
+                    st.session_state['lixo_para_remover'] = [] # Esvazia a lixeira da memória
+                    
+                    # Atualiza a página suavemente para mostrar que os dados sumiram
+                    st.rerun()
 
 # ==========================================
 # 2. LIMPEZA HEURÍSTICA
