@@ -702,30 +702,64 @@ elif menu == "📝 3. Mapeamento de Indicadores":
 
     st.divider()
 
+    # ---- Tabela de Indicadores Mapeados ----
+    st.subheader("📋 Indicadores Mapeados")
+
+    if st.session_state['mapeamento']:
+        rows = []
+        for nome, item in st.session_state['mapeamento'].items():
+            status = "✅ Completo" if item.get('tags') else "⏳ Pendente (sem tags)"
+            rows.append({
+                "Sigla":      nome,
+                "Descrição":  item.get('descricao', ''),
+                "Fórmula":    item.get('formula', ''),
+                "Tags":       ", ".join(item.get('tags', [])),
+                "Status":     status
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        col_cl1, col_cl2 = st.columns([1, 4])
+        with col_cl1:
+            if st.button("🗑️ Limpar Todos", key="btn_limpar_inds"):
+                st.session_state['mapeamento'] = {}
+                st.rerun()
+    else:
+        st.info("ℹ️ Nenhum indicador ainda. Importe a lista acima ou crie um novo abaixo.")
+
+    st.divider()
+
     # ---- Formulário de Criação / Edição ----
-    st.subheader("Adicionar ou Editar Indicador")
+    st.subheader("✏️ Vincular Tags a um Indicador")
 
     nomes_existentes = list(st.session_state['mapeamento'].keys())
-    modo = st.radio("Modo:", ["Novo Indicador", "Editar Existente"], horizontal=True, key="radio_modo")
 
-    if modo == "Editar Existente" and nomes_existentes:
-        nome_edit = st.selectbox("Selecione o indicador:", nomes_existentes, key="sel_nome_edit")
-        item_edit = st.session_state['mapeamento'][nome_edit]
-        nome_ind = nome_edit
-        formula_default = item_edit['formula']
-        tags_default = item_edit['tags']
-    else:
-        nome_ind = st.text_input("Nome do Indicador (ex: Eficiência Térmica TG11)", key="txt_nome_ind")
-        formula_default = ""
-        tags_default = []
+    if not nomes_existentes:
+        st.info("Importe a lista de indicadores acima primeiro.")
+        st.stop()
 
-    desc_default = st.session_state['mapeamento'].get(nome_ind, {}).get('descricao', '') if modo == "Editar Existente" and nomes_existentes else ""
-    descricao_ind = st.text_input("Descrição", value=desc_default, key="txt_descricao",
-                                   placeholder="Ex: Eficiência térmica da turbina a gás")
-    formula = st.text_input("Fórmula Matemática", value=formula_default, key="txt_formula",
-                            placeholder="Ex: (POTENCIA / COMBUSTIVEL) * 100")
+    # Selectbox para escolher qual indicador editar
+    # Inicializa índice selecionado no session_state para persistir entre rerenders
+    if '_ind_idx' not in st.session_state:
+        st.session_state['_ind_idx'] = 0
+    # Ajusta se a lista mudou de tamanho
+    if st.session_state['_ind_idx'] >= len(nomes_existentes):
+        st.session_state['_ind_idx'] = 0
 
-    st.info("💡 **Busque e selecione as tags na ordem das variáveis da fórmula. Você pode buscar várias vezes para acumular tags de diferentes grupos.**")
+    nome_edit = st.selectbox(
+        "Selecione o indicador para vincular tags:",
+        nomes_existentes,
+        index=st.session_state['_ind_idx'],
+        key="sel_nome_edit"
+    )
+    # Atualiza índice ao mudar seleção
+    st.session_state['_ind_idx'] = nomes_existentes.index(nome_edit)
+
+    item_edit = st.session_state['mapeamento'][nome_edit]
+
+    # Mostra descrição e fórmula do indicador selecionado (somente leitura)
+    col_info1, col_info2 = st.columns(2)
+    col_info1.info(f"**Descrição:** {item_edit.get('descricao', '—')}")
+    col_info2.info(f"**Fórmula:** `{item_edit.get('formula', '—')}`")
 
     # --- Estado persistente da busca de tags ---
     if 'map_cols_encontradas' not in st.session_state:
@@ -735,13 +769,14 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     if 'map_tags_acumuladas' not in st.session_state:
         st.session_state['map_tags_acumuladas'] = []
 
-    # Ao trocar de indicador (modo editar), pré-carrega as tags já salvas
-    chave_ind_atual = f"{modo}_{nome_ind}"
-    if st.session_state.get('_map_ind_anterior') != chave_ind_atual:
-        st.session_state['map_tags_acumuladas'] = list(tags_default)
+    # Ao trocar de indicador, pré-carrega as tags já salvas
+    if st.session_state.get('_map_ind_anterior') != nome_edit:
+        st.session_state['map_tags_acumuladas'] = list(item_edit.get('tags', []))
         st.session_state['map_cols_encontradas'] = []
         st.session_state['map_termo_atual'] = ""
-        st.session_state['_map_ind_anterior'] = chave_ind_atual
+        st.session_state['_map_ind_anterior'] = nome_edit
+
+    st.caption("💡 Busque e selecione as tags na ordem das variáveis da fórmula. Pode buscar várias vezes para acumular.")
 
     col_t1, col_t2 = st.columns([4, 1])
     termo_tag = col_t1.text_input(
@@ -763,7 +798,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     if cols_enc:
         st.caption("✅ " + str(len(cols_enc)) + ' tag(s) para "' + st.session_state["map_termo_atual"] + '" — selecione e clique em Adicionar')
         selecionadas_agora = st.multiselect(
-            "Tags encontradas (selecione na ordem da fórmula):",
+            "Tags encontradas:",
             cols_enc,
             key="tags_mapeamento_sel"
         )
@@ -776,9 +811,9 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     elif st.session_state["map_termo_atual"] and not cols_enc:
         st.warning("Nenhuma tag encontrada para " + repr(st.session_state["map_termo_atual"]) + ". Tente outro termo.")
 
-    # Tags acumuladas — editável para reordenar ou remover
+    # Tags acumuladas
     tags_sel = st.multiselect(
-        "🗂️ Tags selecionadas para este indicador (reordene se necessário):",
+        "🗂️ Tags vinculadas a este indicador (reordene se necessário):",
         options=st.session_state['map_tags_acumuladas'],
         default=st.session_state['map_tags_acumuladas'],
         key="tags_mapeamento_final"
@@ -786,54 +821,33 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     if tags_sel != st.session_state['map_tags_acumuladas']:
         st.session_state['map_tags_acumuladas'] = tags_sel
     if st.session_state['map_tags_acumuladas']:
-        if st.button("🗑️ Limpar todas as tags selecionadas", key="btn_clear_tags"):
+        if st.button("🗑️ Limpar tags", key="btn_clear_tags"):
             st.session_state['map_tags_acumuladas'] = []
             st.rerun()
 
     col_btn1, col_btn2 = st.columns([1, 4])
     with col_btn1:
-        salvar = st.button("💾 Salvar Indicador", type="primary", key="btn_salvar_ind")
+        salvar = st.button("💾 Salvar", type="primary", key="btn_salvar_ind")
     with col_btn2:
-        if modo == "Editar Existente" and nomes_existentes:
-            if st.button("🗑️ Remover este Indicador", key="btn_remover_ind"):
-                del st.session_state['mapeamento'][nome_edit]
-                st.success(f"Indicador '{nome_edit}' removido.")
-                st.rerun()
+        if st.button("🗑️ Remover este Indicador", key="btn_remover_ind"):
+            del st.session_state['mapeamento'][nome_edit]
+            st.session_state['_map_ind_anterior'] = None
+            st.rerun()
 
     if salvar:
-        if not nome_ind:
-            st.error("Defina um nome para o indicador.")
-        elif not formula:
-            st.error("Defina a fórmula matemática.")
-        elif not tags_sel:
+        if not tags_sel:
             st.error("Selecione ao menos uma tag.")
         else:
-            st.session_state['mapeamento'][nome_ind] = {'descricao': descricao_ind, 'formula': formula, 'tags': tags_sel}
-            st.success(f"✅ Indicador '{nome_ind}' salvo!")
+            st.session_state['mapeamento'][nome_edit]['tags'] = tags_sel
+            st.success(f"✅ Tags do indicador '{nome_edit}' salvas!")
+            # Avança automaticamente para o próximo indicador pendente
+            pendentes = [n for n, v in st.session_state['mapeamento'].items() if not v.get('tags')]
+            if pendentes:
+                prox = pendentes[0]
+                st.session_state['_ind_idx'] = nomes_existentes.index(prox)
+                st.session_state['_map_ind_anterior'] = None
+                st.info(f"➡️ Próximo pendente: **{prox}**")
             st.rerun()
-
-    st.divider()
-
-    # ---- Tabela de Indicadores Mapeados ----
-    st.subheader("📋 Indicadores Mapeados")
-    if st.session_state['mapeamento']:
-        rows = []
-        for nome, item in st.session_state['mapeamento'].items():
-            status = "✅ Completo" if item['tags'] else "⏳ Pendente (sem tags)"
-            rows.append({
-                "Sigla":      nome,
-                "Descrição":  item.get('descricao', ''),
-                "Fórmula":    item.get('formula', ''),
-                "Tags":       ", ".join(item.get('tags', [])),
-                "Status":     status
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-
-        if st.button("🗑️ Limpar Todos os Indicadores", key="btn_limpar_inds"):
-            st.session_state['mapeamento'] = {}
-            st.rerun()
-    else:
-        st.info("Nenhum indicador mapeado ainda.")
 
 
 # ==========================================
