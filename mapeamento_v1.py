@@ -24,55 +24,42 @@ def limpar_dados(df, remover_zeros, remover_negativos, outlier_metodo, fator, li
     df_res = df.copy()
     df_res = df_res.apply(pd.to_numeric, errors='coerce')
     
-    # 1. Limites Específicos (Parte A)
+    # 1. Identifica e protege as tags customizadas
+    tags_protegidas = set()
+    
     for regra in limites_custom:
         for tag in regra['tags']:
             if tag in df_res.columns:
+                tags_protegidas.add(tag)
+                # Aplica o limite APENAS nestas tags
                 if regra['minimo'] is not None:
                     df_res[tag] = df_res[tag].mask(df_res[tag] < regra['minimo'])
                 if regra['maximo'] is not None:
                     df_res[tag] = df_res[tag].mask(df_res[tag] > regra['maximo'])
 
-    # 2. Filtros Globais (Parte B)
-    if remover_zeros: df_res = df_res.mask(df_res.abs() < 1e-5)
-    if remover_negativos: df_res = df_res.mask(df_res < 0)
+    # 2. Separa o resto da fábrica para a Limpeza Global
+    tags_globais = [c for c in df_res.columns if c not in tags_protegidas]
 
-    if outlier_metodo == "IQR":
-        q1, q3 = df_res.quantile(0.25), df_res.quantile(0.75)
-        iqr = q3 - q1
-        df_res = df_res.mask((df_res < (q1 - fator * iqr)) | (df_res > (q3 + fator * iqr)))
-    elif outlier_metodo == "Z-Score":
-        z_scores = (df_res - df_res.mean()) / df_res.std()
-        df_res = df_res.mask(z_scores.abs() > fator)
+    if tags_globais:
+        df_glob = df_res[tags_globais].copy()
+        
+        # O rolo compressor passa SÓ nas tags que não foram protegidas
+        if remover_zeros: df_glob = df_glob.mask(df_glob.abs() < 1e-5)
+        if remover_negativos: df_glob = df_glob.mask(df_glob < 0)
 
+        if outlier_metodo == "IQR":
+            q1, q3 = df_glob.quantile(0.25), df_glob.quantile(0.75)
+            iqr = q3 - q1
+            df_glob = df_glob.mask((df_glob < (q1 - fator * iqr)) | (df_glob > (q3 + fator * iqr)))
+        elif outlier_metodo == "Z-Score":
+            z_scores = (df_glob - df_glob.mean()) / df_glob.std()
+            df_glob = df_glob.mask(z_scores.abs() > fator)
+            
+        # Devolve as colunas globais já limpas para o dataframe principal
+        df_res[tags_globais] = df_glob
+
+    # 3. Preenche os buracos gerados pelos filtros
     return df_res.ffill().bfill()
-
-def avaliar_formula_complexa(df, formula, tags):
-    """Lê a string da fórmula e substitui pelas tags correspondentes"""
-    termos_ignorar = {'SOMA', 'MEDIA', 'SE', 'MAX', 'MIN', 'IF', 'AND', 'OR'}
-    palavras_brutas = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*%?', formula)
-    vars_esperadas = list(dict.fromkeys([p for p in palavras_brutas if p.upper() not in termos_ignorar]))
-    
-    # Se não tem fórmula matemática explícita, soma as tags como padrão de segurança
-    if not vars_esperadas:
-        return df[tags].sum(axis=1)
-
-    df_eval = pd.DataFrame()
-    expressao = formula
-    
-    # Mapeia as variáveis da fórmula para as tags selecionadas na ordem
-    for i, var in enumerate(vars_esperadas):
-        if i < len(tags):
-            safe_var = re.sub(r'[^a-zA-Z0-9_]', '', var)
-            if not safe_var: safe_var = f"VAR_{i}"
-            df_eval[safe_var] = df[tags[i]]
-            expressao = re.sub(fr'\b{re.escape(var)}\b', safe_var, expressao)
-
-    try:
-        serie_ind = df_eval.eval(expressao, engine='python')
-        return serie_ind.replace([np.inf, -np.inf], np.nan)
-    except Exception:
-        return None
 
 # ==========================================
 # MENU LATERAL
