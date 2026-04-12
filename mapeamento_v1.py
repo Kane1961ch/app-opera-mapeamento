@@ -38,6 +38,8 @@ def preparar_base_pi(arquivo_upload):
     """Lê o Excel bruto exportado do PI AF, extrai e limpa os nomes das tags,
     estrutura o DataFrame com índice temporal e remove tags 100% mortas."""
     try:
+        if hasattr(arquivo_upload, "seek"):
+            arquivo_upload.seek(0)
         df_raw = pd.read_excel(arquivo_upload, header=0)
     except Exception as e:
         st.error(f"❌ Erro ao ler o Excel: {e}")
@@ -275,21 +277,43 @@ st.sidebar.info("Monitoramento estatístico multivariado de processo.")
 if menu == "📂 1. Carga e Auditoria":
     st.title("📂 Carga e Auditoria de Sensores")
 
-    tipo_arquivo = st.radio("Formato do arquivo:", ["PKL (base já processada)", "XLSX (exportação bruta do PI AF)"], horizontal=True)
+    st.info(
+        "**PKL** → base já processada (gerada por este app ou pelo notebook).  \n"
+        "**XLSX** → exportação bruta do PI AF (tags nas linhas, datas nas colunas)."
+    )
 
     arquivo = st.file_uploader(
-        "Arraste seu arquivo",
+        "Arraste seu arquivo (.pkl ou .xlsx)",
         type=["pkl", "xlsx"],
-        help="PKL = base já limpa pelo processador. XLSX = exportação direta do PI AF (com nomes de tags nas linhas)."
+        help="O formato é detectado automaticamente pela extensão do arquivo."
     )
 
     if arquivo:
         with st.spinner("Processando base de dados..."):
             try:
-                if arquivo.name.endswith('.pkl') or tipo_arquivo.startswith("PKL"):
+                ext = arquivo.name.rsplit('.', 1)[-1].lower()
+                if ext == 'pkl':
+                    import pickle
                     df = pd.read_pickle(arquivo)
+                elif ext in ('xlsx', 'xls'):
+                    # Detecta automaticamente se é exportação bruta do PI AF
+                    # (primeira coluna = nomes de tags, demais = datas)
+                    # ou uma base tabular normal (índice na col 0)
+                    df_peek = pd.read_excel(arquivo, nrows=3, header=0)
+                    arquivo.seek(0)  # reset para leitura completa
+                    primeira_col = str(df_peek.columns[0])
+                    # Heurística: se a primeira coluna parece um caminho de tag PI (contém '\' ou '|')
+                    # ou se os cabeçalhos das outras colunas parecem datas → exportação bruta
+                    outros_cols = df_peek.columns[1:]
+                    tem_datas = sum(1 for c in outros_cols if pd.notna(pd.to_datetime(str(c), errors='coerce'))) > len(outros_cols) * 0.5
+                    tem_path_pi = any(ch in primeira_col for ch in ['\\', '|', '/'])
+                    if tem_datas or tem_path_pi:
+                        df = preparar_base_pi(arquivo)
+                    else:
+                        df = pd.read_excel(arquivo, index_col=0)
                 else:
-                    df = preparar_base_pi(arquivo)
+                    st.error(f"❌ Extensão '{ext}' não suportada.")
+                    df = None
 
                 if df is not None:
                     if not pd.api.types.is_datetime64_any_dtype(df.index):
