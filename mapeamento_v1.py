@@ -181,15 +181,8 @@ def limpar_serie(serie, remover_zeros, remover_negativos, lim_inf, lim_sup,
 
 
 def gerar_dataframe_limpo(df_original, tags_validas, cfg):
-    """Aplica o motor heurístico às tags e retorna DataFrame limpo.
-
-    Lógica de prioridade por tag:
-      1. Tag COM regra específica  → aplica APENAS os limites [min, max] da regra.
-         As heurísticas globais (zeros, negativos, outlier) NÃO são aplicadas,
-         pois o engenheiro já definiu exatamente o intervalo válido.
-      2. Tag SEM regra específica  → aplica a limpeza global conforme cfg,
-         mas somente se 'usar_limpeza' estiver ativado.
-      3. Tag sem regra e limpeza desativada → passa sem alteração.
+    """Aplica filtros APENAS nas tags com regra específica definida pelo engenheiro.
+    Todas as demais tags passam sem qualquer alteração (pass-through).
     """
     # Monta dicionário de limites: tag.upper() -> (min, max)
     limites_cfg = parsear_limites_por_variavel(st.session_state.get('limites_texto', ''))
@@ -197,49 +190,24 @@ def gerar_dataframe_limpo(df_original, tags_validas, cfg):
         for tag in regra['tags']:
             limites_cfg[tag.upper()] = (regra.get('minimo'), regra.get('maximo'))
 
-    # Conjunto de tags que possuem regra específica (para lookup rápido)
-    tags_com_regra = set()
-    for tag in tags_validas:
-        lim_inf, lim_sup = encontrar_limites_para_tag(tag, limites_cfg)
-        if lim_inf is not None or lim_sup is not None:
-            tags_com_regra.add(tag)
-
     df_saida = pd.DataFrame(index=df_original.index)
     for tag in tags_validas:
         s_orig = pd.to_numeric(df_original[tag], errors="coerce")
         lim_inf, lim_sup = encontrar_limites_para_tag(tag, limites_cfg)
-        tem_regra = tag in tags_com_regra
 
-        if tem_regra:
-            # Caso 1: regra específica — aplica SOMENTE os limites, sem heurística global
+        if lim_inf is not None or lim_sup is not None:
+            # Tag COM regra: aplica somente os limites definidos pelo engenheiro
             s = s_orig.copy()
             if lim_inf is not None:
                 s = s.mask(s < lim_inf)
             if lim_sup is not None:
                 s = s.mask(s > lim_sup)
-            # Aplica apenas forward fill e rolling se configurados (não afetam física)
-            if cfg['preencher_ultimo']:
-                s = s.ffill()
-            if cfg['usar_rolling'] and cfg['janela_rolling'] > 1:
-                s = s.rolling(window=cfg['janela_rolling'], min_periods=1).mean()
             df_saida[tag] = s
-
-        elif cfg['usar_limpeza']:
-            # Caso 2: sem regra + limpeza global ativada
-            df_saida[tag] = limpar_serie(
-                s_orig,
-                cfg['remover_zeros'], cfg['remover_negativos'],
-                None, None,  # sem limites específicos
-                cfg['usar_outlier'], cfg['metodo_outlier'],
-                cfg['fator_iqr'], cfg['limite_zscore'],
-                cfg['preencher_ultimo'], cfg['usar_rolling'],
-                cfg['janela_rolling'], cfg['pct_minimo']
-            )
         else:
-            # Caso 3: sem regra + limpeza desativada → pass-through
+            # Tag SEM regra: pass-through, sem nenhuma alteração
             df_saida[tag] = s_orig
 
-    return df_saida.dropna(how="all")
+    return df_saida
 
 
 # ---- Motor Calculador de Indicadores (Célula 5) ----
@@ -563,33 +531,16 @@ elif menu == "🧹 2. Limpeza Heurística":
 
     st.divider()
 
-    # ---- B. Configuração Global ----
-    st.subheader("B. Configuração da Limpeza Global")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        usar_limpeza = st.checkbox("Ativar Heurística Global", value=True, key="chk_usar_limpeza")
-        remover_zeros = st.checkbox("Remover Zeros", value=True, key="chk_remover_zeros")
-        remover_negativos = st.checkbox("Remover Negativos", value=True, key="chk_remover_neg")
-    with col2:
-        usar_outlier = st.checkbox("Filtro de Outliers", value=False, key="chk_usar_outlier")
-        metodo_outlier = st.selectbox("Método Outlier", ["IQR", "Z-Score"], key="sel_metodo_outlier")
-        fator_iqr = st.number_input("Fator IQR", value=1.5, min_value=0.1, key="num_fator_iqr")
-        limite_zscore = st.number_input("Limite Z-Score", value=3.0, min_value=0.1, key="num_limite_zscore")
-    with col3:
-        preencher_ultimo = st.checkbox("Forward Fill (último valor)", value=False, key="chk_ffill")
-        usar_rolling = st.checkbox("Suavização Rolling Mean", value=False, key="chk_rolling")
-        janela_rolling = st.number_input("Janela Rolling", value=5, min_value=2, step=1, key="num_janela_rolling")
-        pct_minimo = st.slider("% Mínimo de Dados Válidos", 0.0, 1.0, 0.0, 0.01, key="sld_pct_minimo")
-
-    cfg = dict(
-        usar_limpeza=usar_limpeza, remover_zeros=remover_zeros, remover_negativos=remover_negativos,
-        usar_outlier=usar_outlier, metodo_outlier=metodo_outlier, fator_iqr=fator_iqr,
-        limite_zscore=limite_zscore, preencher_ultimo=preencher_ultimo, usar_rolling=usar_rolling,
-        janela_rolling=int(janela_rolling), pct_minimo=pct_minimo
+    # ---- B. Aplicar ----
+    st.subheader("B. Aplicar Regras")
+    st.info(
+        "Os filtros são aplicados **somente** nas tags com regra definida acima.  \n"
+        "Todas as demais variáveis passam sem qualquer alteração."
     )
 
-    if st.button("🚀 Aplicar Limpeza Completa", key="btn_aplicar_limpeza"):
+    cfg = {}  # Não há parâmetros globais — apenas regras específicas por tag
+
+    if st.button("🚀 Aplicar Regras à Base", key="btn_aplicar_limpeza"):
         with st.spinner("Aplicando filtros de engenharia..."):
             tags_validas = list(df_base.columns)
             df_limpo = gerar_dataframe_limpo(df_base, tags_validas, cfg)
@@ -597,56 +548,54 @@ elif menu == "🧹 2. Limpeza Heurística":
             st.session_state['cfg_limpeza'] = cfg
             st.success(f"✅ Limpeza concluída! {df_limpo.shape[1]} tags, {df_limpo.shape[0]} instantes.")
 
-            # Tabela ANTES vs DEPOIS
-            st.write("### 📊 Impacto dos Filtros (ANTES vs DEPOIS)")
-
-            # Identifica quais tags foram tratadas por regra específica
+            # Mostra apenas as tags que tiveram regra aplicada
             limites_cfg_ui = {}
             for regra in st.session_state.get('limites_customizados', []):
                 for tag in regra['tags']:
                     limites_cfg_ui[tag.upper()] = (regra.get('minimo'), regra.get('maximo'))
-            tags_com_regra_esp = {
+
+            tags_filtradas = [
                 tag for tag in tags_validas
                 if encontrar_limites_para_tag(tag, limites_cfg_ui)[0] is not None
                 or encontrar_limites_para_tag(tag, limites_cfg_ui)[1] is not None
-            }
+            ]
 
-            df_antes_num = df_base.apply(pd.to_numeric, errors='coerce')
-            colunas_stats = ['count', 'mean', '50%', 'std', 'min', 'max']
-            try:
-                desc_antes = df_antes_num.describe().T[colunas_stats].rename(columns={'50%': 'mediana'})
-                desc_depois = df_limpo.describe().T[colunas_stats].rename(columns={'50%': 'mediana'})
-                comparativo = pd.concat([desc_antes, desc_depois], axis=1, keys=['🔴 ANTES', '🟢 DEPOIS']).round(2)
+            if not tags_filtradas:
+                st.info("Nenhuma regra definida — base salva sem alterações.")
+            else:
+                st.write(f"### 📊 Impacto dos Filtros — {len(tags_filtradas)} tag(s) com regra")
+                df_antes_num = df_base[tags_filtradas].apply(pd.to_numeric, errors='coerce')
+                colunas_stats = ['count', 'mean', '50%', 'std', 'min', 'max']
+                try:
+                    desc_antes = df_antes_num.describe().T[colunas_stats].rename(columns={'50%': 'mediana'})
+                    desc_depois = df_limpo[tags_filtradas].describe().T[colunas_stats].rename(columns={'50%': 'mediana'})
+                    comparativo = pd.concat([desc_antes, desc_depois], axis=1, keys=['🔴 ANTES', '🟢 DEPOIS']).round(2)
 
-                # Adiciona coluna indicando o modo de tratamento
-                def modo_tag(tag):
-                    if tag in tags_com_regra_esp:
+                    def descr_regra(tag):
                         lims = encontrar_limites_para_tag(tag, limites_cfg_ui)
                         partes = []
                         if lims[0] is not None: partes.append(f"min={lims[0]}")
                         if lims[1] is not None: partes.append(f"max={lims[1]}")
-                        return "📌 Regra [" + ", ".join(partes) + "]"
-                    elif usar_limpeza:
-                        return "🌐 Global"
-                    else:
-                        return "⬜ Sem filtro"
+                        return "[" + ", ".join(partes) + "]"
 
-                comparativo.insert(0, "Modo", [modo_tag(t) for t in comparativo.index])
-                st.dataframe(comparativo, use_container_width=True)
-            except Exception:
-                st.warning("Não foi possível gerar tabela comparativa.")
+                    comparativo.insert(0, "Regra", [descr_regra(t) for t in comparativo.index])
+                    st.dataframe(comparativo, use_container_width=True)
+                except Exception:
+                    st.warning("Não foi possível gerar tabela comparativa.")
 
-            # Amostra Visual
-            st.write("### 📈 Amostra Visual (Primeira Tag)")
-            ptag = df_limpo.columns[0]
-            fig, ax = plt.subplots(figsize=(10, 3))
-            ax.plot(df_base.index, df_antes_num[ptag], alpha=0.3, label="Original", color='red')
-            ax.plot(df_limpo.index, df_limpo[ptag], alpha=0.8, label="Limpo", color='blue')
-            ax.set_title(ptag)
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
-            plt.close(fig)
+                # Amostra visual da primeira tag filtrada
+                st.write(f"### 📈 Amostra Visual — {tags_filtradas[0]}")
+                ptag = tags_filtradas[0]
+                df_antes_ptag = df_base[ptag].apply(pd.to_numeric) if hasattr(df_base[ptag], 'apply') else pd.to_numeric(df_base[ptag], errors='coerce')
+                fig, ax = plt.subplots(figsize=(10, 3))
+                ax.plot(df_base.index, pd.to_numeric(df_base[ptag], errors='coerce'),
+                        alpha=0.3, label="Original", color='red')
+                ax.plot(df_limpo.index, df_limpo[ptag], alpha=0.8, label="Filtrado", color='blue')
+                ax.set_title(ptag)
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                plt.close(fig)
 
 
 # ==========================================
