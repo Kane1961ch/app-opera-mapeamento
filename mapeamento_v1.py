@@ -127,15 +127,23 @@ if menu == "📂 1. Carga e Auditoria":
             # A caixinha de confirmação (Checkbox)
             confirmar = st.checkbox("Estou ciente e confirmo que desejo remover estes sensores da base de dados.")
             
-            # O botão só aparece se a caixinha for marcada
             if confirmar:
                 if st.button("🗑️ Apagar Sensores Selecionados"):
+                    # 1. Apaga as colunas da base principal
                     st.session_state['df_pi'] = st.session_state['df_pi'].drop(columns=st.session_state['lixo_para_remover'], errors='ignore')
-                    st.success(f"✅ {len(st.session_state['lixo_para_remover'])} sensores redundantes foram apagados com sucesso!")
-                    st.session_state['lixo_para_remover'] = [] # Esvazia a lixeira da memória
                     
-                    # Atualiza a página suavemente para mostrar que os dados sumiram
-                    st.rerun()
+                    # 2. Salva a mensagem de sucesso na memória ANTES de recarregar a página
+                    st.session_state['msg_sucesso_limpeza'] = f"✅ {len(st.session_state['lixo_para_remover'])} sensores redundantes foram apagados com sucesso!"
+                    
+                    # 3. Esvazia a lixeira
+                    st.session_state['lixo_para_remover'] = [] 
+                    
+                    # 4. Recarrega a tela
+                    st.rerun() 
+                    
+        # Se a mensagem de sucesso existir na memória, mostra ela na tela para o usuário ver!
+        if 'msg_sucesso_limpeza' in st.session_state:
+            st.success(st.session_state['msg_sucesso_limpeza'])
 
 # ==========================================
 # 2. LIMPEZA HEURÍSTICA
