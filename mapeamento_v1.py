@@ -470,25 +470,52 @@ elif menu == "🧹 2. Limpeza Heurística":
     st.subheader("A. Limites Específicos por Variável (Memória de Limites)")
 
     with st.expander("➕ Adicionar / Gerenciar Regras de Limite", expanded=False):
-        termo_lim = st.text_input("Buscar variável (ex: pressao, TG11):", key="busca_limites")
-        if termo_lim:
-            cols_enc = buscar_tags(df_base.columns, termo_lim)
-            if cols_enc:
-                tags_sel = st.multiselect("Tags encontradas:", cols_enc, key="tags_lim_sel")
+        # --- Inicializa estado da busca ---
+        if 'lim_cols_encontradas' not in st.session_state:
+            st.session_state['lim_cols_encontradas'] = []
+        if 'lim_termo_atual' not in st.session_state:
+            st.session_state['lim_termo_atual'] = ""
+
+        col_busca, col_btn_busca = st.columns([4, 1])
+        termo_lim = col_busca.text_input(
+            "1. Digitar termo de busca (ex: potencia, TG11):",
+            key="busca_limites",
+            placeholder="Digite e clique em Buscar →"
+        )
+        col_btn_busca.write("")
+        col_btn_busca.write("")
+        if col_btn_busca.button("🔍 Buscar", key="btn_busca_lim"):
+            if termo_lim:
+                encontradas = buscar_tags(df_base.columns, termo_lim)
+                st.session_state['lim_cols_encontradas'] = encontradas
+                st.session_state['lim_termo_atual'] = termo_lim
+            else:
+                st.session_state['lim_cols_encontradas'] = []
+
+        cols_enc = st.session_state['lim_cols_encontradas']
+        if cols_enc:
+            termo_atual = st.session_state["lim_termo_atual"]
+            st.caption("✅ " + str(len(cols_enc)) + ' tag(s) encontrada(s) para "' + termo_atual + '"')
+            tags_sel = st.multiselect("2. Selecionar tags:", cols_enc, key="tags_lim_sel")
+            if tags_sel:
                 cA, cB = st.columns(2)
-                v_min = cA.number_input("Mínimo (deixe 0 p/ ignorar)", value=0.0, key="vmin_lim")
-                v_max = cB.number_input("Máximo (deixe 0 p/ ignorar)", value=0.0, key="vmax_lim")
-                usar_min = cA.checkbox("Aplicar Mínimo", value=False)
-                usar_max = cB.checkbox("Aplicar Máximo", value=False)
-                if st.button("💾 Salvar Regra") and tags_sel:
+                v_min = cA.number_input("Mínimo", value=0.0, key="vmin_lim")
+                v_max = cB.number_input("Máximo", value=0.0, key="vmax_lim")
+                usar_min = cA.checkbox("Aplicar Mínimo", value=False, key="usar_min_lim")
+                usar_max = cB.checkbox("Aplicar Máximo", value=False, key="usar_max_lim")
+                if st.button("💾 Salvar Regra", key="btn_salvar_regra"):
                     st.session_state['limites_customizados'].append({
                         'tags': tags_sel,
                         'minimo': v_min if usar_min else None,
                         'maximo': v_max if usar_max else None
                     })
-                    st.success("✅ Regra adicionada!")
-            else:
-                st.info("Nenhuma tag encontrada com este termo.")
+                    # Limpa a busca após salvar
+                    st.session_state['lim_cols_encontradas'] = []
+                    st.session_state['lim_termo_atual'] = ""
+                    st.success(f"✅ Regra salva para {len(tags_sel)} tag(s)!")
+                    st.rerun()
+        elif st.session_state["lim_termo_atual"]:
+            st.warning("Nenhuma tag encontrada para " + repr(st.session_state["lim_termo_atual"]) + ". Tente outro termo.")
 
     if st.session_state['limites_customizados']:
         st.markdown("**Regras ativas:**")
@@ -629,18 +656,70 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     formula = st.text_input("Fórmula Matemática", value=formula_default,
                             placeholder="Ex: (POTENCIA / COMBUSTIVEL) * 100")
 
-    st.info("💡 **Busque e selecione as tags na ordem das variáveis da fórmula.**")
-    termo_tag = st.text_input("Buscar tags (ex: Potencia, TG11):", key="busca_tags_mapeamento")
-    if termo_tag:
-        cols_enc = [c for c in df_base.columns
-                    if normalizar(termo_tag) in normalizar(c)
-                    and ((df_base[c].isna().sum() + (df_base[c] == 0).sum()) / len(df_base)) < 0.99]
-        tags_sel = st.multiselect("Tags encontradas (selecione na ordem da fórmula):", cols_enc,
-                                  default=[t for t in tags_default if t in cols_enc],
-                                  key="tags_mapeamento_sel")
-    else:
-        tags_sel = st.multiselect("Tags Físicas (busque acima):", df_base.columns,
-                                  default=tags_default, key="tags_mapeamento_all")
+    st.info("💡 **Busque e selecione as tags na ordem das variáveis da fórmula. Você pode buscar várias vezes para acumular tags de diferentes grupos.**")
+
+    # --- Estado persistente da busca de tags ---
+    if 'map_cols_encontradas' not in st.session_state:
+        st.session_state['map_cols_encontradas'] = []
+    if 'map_termo_atual' not in st.session_state:
+        st.session_state['map_termo_atual'] = ""
+    if 'map_tags_acumuladas' not in st.session_state:
+        st.session_state['map_tags_acumuladas'] = []
+
+    # Ao trocar de indicador (modo editar), pré-carrega as tags já salvas
+    chave_ind_atual = f"{modo}_{nome_ind}"
+    if st.session_state.get('_map_ind_anterior') != chave_ind_atual:
+        st.session_state['map_tags_acumuladas'] = list(tags_default)
+        st.session_state['map_cols_encontradas'] = []
+        st.session_state['map_termo_atual'] = ""
+        st.session_state['_map_ind_anterior'] = chave_ind_atual
+
+    col_t1, col_t2 = st.columns([4, 1])
+    termo_tag = col_t1.text_input(
+        "Buscar tags (ex: Potencia, AberturaIGV, TG11):",
+        key="busca_tags_mapeamento",
+        placeholder="Digite e clique em Buscar →"
+    )
+    col_t2.write("")
+    col_t2.write("")
+    if col_t2.button("🔍 Buscar", key="btn_busca_map"):
+        if termo_tag:
+            encontradas = [c for c in df_base.columns
+                           if normalizar(termo_tag) in normalizar(c)
+                           and ((df_base[c].isna().sum() + (df_base[c] == 0).sum()) / len(df_base)) < 0.99]
+            st.session_state['map_cols_encontradas'] = encontradas
+            st.session_state['map_termo_atual'] = termo_tag
+
+    cols_enc = st.session_state['map_cols_encontradas']
+    if cols_enc:
+        st.caption("✅ " + str(len(cols_enc)) + ' tag(s) para "' + st.session_state["map_termo_atual"] + '" — selecione e clique em Adicionar')
+        selecionadas_agora = st.multiselect(
+            "Tags encontradas (selecione na ordem da fórmula):",
+            cols_enc,
+            key="tags_mapeamento_sel"
+        )
+        if st.button("➕ Adicionar à seleção", key="btn_add_tags"):
+            for t in selecionadas_agora:
+                if t not in st.session_state['map_tags_acumuladas']:
+                    st.session_state['map_tags_acumuladas'].append(t)
+            st.session_state['map_cols_encontradas'] = []
+            st.rerun()
+    elif st.session_state["map_termo_atual"] and not cols_enc:
+        st.warning("Nenhuma tag encontrada para " + repr(st.session_state["map_termo_atual"]) + ". Tente outro termo.")
+
+    # Tags acumuladas — editável para reordenar ou remover
+    tags_sel = st.multiselect(
+        "🗂️ Tags selecionadas para este indicador (reordene se necessário):",
+        options=st.session_state['map_tags_acumuladas'],
+        default=st.session_state['map_tags_acumuladas'],
+        key="tags_mapeamento_final"
+    )
+    if tags_sel != st.session_state['map_tags_acumuladas']:
+        st.session_state['map_tags_acumuladas'] = tags_sel
+    if st.session_state['map_tags_acumuladas']:
+        if st.button("🗑️ Limpar todas as tags selecionadas", key="btn_clear_tags"):
+            st.session_state['map_tags_acumuladas'] = []
+            st.rerun()
 
     col_btn1, col_btn2 = st.columns([1, 4])
     with col_btn1:
