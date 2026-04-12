@@ -165,14 +165,36 @@ elif menu == "🧹 2. Limpeza Heurística":
             fator = st.number_input("Fator Sensibilidade", value=1.5 if metodo == "IQR" else 3.0)
 
         if st.button("🚀 Aplicar Limpeza Completa"):
-            with st.spinner("Limpando histórico temporal..."):
-                df_limpo = limpar_dados(st.session_state['df_pi'], z, n, metodo, fator, st.session_state['limites_customizados'])
+            with st.spinner("Limpando histórico temporal e calculando estatísticas..."):
+                df_bruto = st.session_state['df_pi']
+                df_limpo = limpar_dados(df_bruto, z, n, metodo, fator, st.session_state['limites_customizados'])
                 st.session_state['df_limpo'] = df_limpo
                 st.success("✅ Dados limpos e prontos!")
                 
+                # --- A TABELA DE COMPARAÇÃO (ANTES vs DEPOIS) ---
+                st.write("### 📊 Impacto dos Filtros na Base")
+                
+                # Força numérico no original para evitar erros no cálculo
+                df_antes_num = df_bruto.apply(pd.to_numeric, errors='coerce')
+                colunas_stats = ['count', 'mean', '50%', 'std', 'min', 'max']
+                
+                try:
+                    desc_antes = df_antes_num.describe().T[colunas_stats].rename(columns={'50%': 'mediana'})
+                    desc_depois = df_limpo.describe().T[colunas_stats].rename(columns={'50%': 'mediana'})
+                    
+                    # Concatena as tabelas lado a lado com os cabeçalhos coloridos
+                    comparativo = pd.concat([desc_antes, desc_depois], axis=1, keys=['🔴 ANTES', '🟢 DEPOIS']).round(2)
+                    
+                    # Mostra a tabela interativa na tela
+                    st.dataframe(comparativo, use_container_width=True)
+                except Exception as e:
+                    st.warning("Aviso: Não foi possível gerar a tabela estatística de comparação com estes dados.")
+
+                # --- O GRÁFICO DE AMOSTRA ---
+                st.write("### 📈 Amostra Visual (Primeira Tag da Lista)")
                 fig, ax = plt.subplots(figsize=(10, 3))
                 ptag = df_limpo.columns[0]
-                ax.plot(st.session_state['df_pi'].index, st.session_state['df_pi'][ptag], alpha=0.3, label="Original", color='red')
+                ax.plot(df_bruto.index, df_antes_num[ptag], alpha=0.3, label="Original", color='red')
                 ax.plot(df_limpo.index, df_limpo[ptag], alpha=0.8, label="Limpo", color='blue')
                 ax.legend()
                 st.pyplot(fig)
