@@ -1113,7 +1113,8 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
                                 st.success("✅ **DIAGNÓSTICO:** O T² filtrou **falsos positivos**! "
                                            "Uma mudança de carga acionou o alarme univariado, mas a física do conjunto foi respeitada.")
                             else:
-                                st.info("ℹ️ Alarmes univariado e multivariado estão alinhados.")import unicodedata
+                                st.info("ℹ️ Alarmes univariado e multivariado estão alinhados.")
+import unicodedata
 import streamlit as st
 import pandas as pd
 import numpy as np
