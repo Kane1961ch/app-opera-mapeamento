@@ -211,49 +211,76 @@ def gerar_dataframe_limpo(df_original, tags_validas, cfg):
     return df_saida
 
 
-# ---- Motor Calculador de Indicadores (Célula 5) ----
-def calcular_indicador(df_plot, formula, tags_validas):
-    """Tenta calcular a série temporal do indicador via eval da fórmula.
-    Retorna dict {nome_unidade: serie} ou None se falhar."""
+# ---- Motor Calculador de Indicadores ----
+def calcular_indicador(df_plot, formula, tags_validas, var_tags=None):
+    """Calcula a série temporal do indicador.
+
+    var_tags: dict {var_nome: [tag1, tag2, ...]} — mapeamento explícito variável→tags.
+              Se fornecido, é usado diretamente (modo preciso).
+              Se None, distribui tags_validas igualmente pelas variáveis da fórmula (modo legado).
+
+    Retorna (dict {nome_unidade: serie}, erro_str | None).
+    """
     parte_direita = formula.split("=", 1)[1] if "=" in formula else formula
     parte_direita = parte_direita.strip()
-    termos_ignorar = {'SOMA', 'MEDIA', 'SE', 'MAX', 'MIN', 'IF', 'AND', 'OR'}
+    termos_ignorar = {'SOMA', 'MEDIA', 'SE', 'MAX', 'MIN', 'IF', 'AND', 'OR', 'NAN'}
     palavras_brutas = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*%?', parte_direita)
-    vars_esperadas = list(dict.fromkeys([p for p in palavras_brutas if p.upper() not in termos_ignorar]))
-    if not vars_esperadas:
-        vars_esperadas = ["VAR_UNICA"]
+    vars_formula = list(dict.fromkeys(
+        p for p in palavras_brutas if p.upper() not in termos_ignorar
+    )) or ["VAR_UNICA"]
+
+    # ── Monta mapping {var: [tags]} ──
+    if var_tags:
+        # Modo preciso: usa mapeamento explícito salvo pelo usuário
+        mapping = {v: [t for t in var_tags.get(v, []) if t in df_plot.columns]
+                   for v in vars_formula}
+        # N de unidades = menor lista de tags entre as variáveis
+        ns = [len(mapping[v]) for v in vars_formula if mapping.get(v)]
+        chunk = min(ns) if ns else 0
+    else:
+        # Modo legado: distribui lista flat igualmente pelas variáveis
+        if len(vars_formula) == 0 or len(tags_validas) % len(vars_formula) != 0:
+            return None, "Número de tags incompatível com a fórmula."
+        chunk = len(tags_validas) // len(vars_formula)
+        mapping = {var: tags_validas[i * chunk:(i + 1) * chunk]
+                   for i, var in enumerate(vars_formula)}
+
+    if chunk == 0:
+        return None, "Nenhuma tag válida mapeada para as variáveis da fórmula."
 
     resultados = {}
-    if len(tags_validas) % len(vars_esperadas) == 0:
-        chunk = len(tags_validas) // len(vars_esperadas)
-        mapping = {var: tags_validas[i * chunk:(i + 1) * chunk] for i, var in enumerate(vars_esperadas)}
+    vars_ordenadas = sorted(vars_formula, key=len, reverse=True)
 
-        for k in range(chunk):
-            tag_principal = mapping[vars_esperadas[0]][k]
-            maq = tag_principal.split('_')[-1] if '_' in tag_principal else f"Unid_{k + 1}"
+    for k in range(chunk):
+        tag_principal = mapping[vars_formula[0]][k]
+        # Nome da unidade: sufixo após último '_'
+        partes = tag_principal.rsplit('_', 1)
+        maq = partes[-1] if len(partes) > 1 else f"Unid_{k+1}"
 
-            df_eval = pd.DataFrame()
-            expressao = parte_direita
-            vars_ordenadas = sorted(vars_esperadas, key=len, reverse=True)
-            for var in vars_ordenadas:
-                safe_var = re.sub(r'[^a-zA-Z0-9_]', '', var) or "VAR_SYMB"
-                df_eval[safe_var] = df_plot[mapping[var][k]]
-                expressao = re.sub(fr'\b{re.escape(var)}\b', safe_var, expressao)
+        df_eval = pd.DataFrame(index=df_plot.index)
+        expressao = parte_direita
 
+        for var in vars_ordenadas:
+            tags_var = mapping.get(var, [])
+            if k >= len(tags_var):
+                continue
+            safe_var = re.sub(r'[^a-zA-Z0-9_]', '', var) or "VAR_SYMB"
+            df_eval[safe_var] = pd.to_numeric(df_plot[tags_var[k]], errors='coerce')
+            expressao = re.sub(fr'\b{re.escape(var)}\b', safe_var, expressao)
+
+        try:
+            serie = df_eval.eval(expressao, engine='python')
+        except Exception:
+            local_dict = {col: df_eval[col] for col in df_eval.columns}
             try:
-                serie = df_eval.eval(expressao, engine='python')
-            except Exception:
-                local_dict = {col: df_eval[col] for col in df_eval.columns}
-                try:
-                    serie = eval(expressao, {"__builtins__": None, "np": np, "pd": pd}, local_dict)
-                except Exception as e:
-                    return None, str(e)
+                serie = eval(expressao, {"__builtins__": None, "np": np, "pd": pd}, local_dict)
+            except Exception as e:
+                return None, str(e)
 
-            serie = serie.replace([np.inf, -np.inf], np.nan)
-            resultados[maq] = serie
+        serie = pd.Series(serie, index=df_plot.index).replace([np.inf, -np.inf], np.nan)
+        resultados[maq] = serie
 
-        return resultados, None
-    return None, "Número de tags incompatível com a fórmula."
+    return (resultados, None) if resultados else (None, "Nenhum resultado calculado.")
 
 
 # ---- PCA (Célula 6) ----
@@ -770,104 +797,172 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     st.session_state['_ind_idx'] = nomes_existentes.index(nome_edit)
 
     item_edit = st.session_state['mapeamento'][nome_edit]
+    formula_edit = item_edit.get('formula', '')
 
     # Mostra descrição e fórmula do indicador selecionado (somente leitura)
     col_info1, col_info2 = st.columns(2)
     col_info1.info(f"**Descrição:** {item_edit.get('descricao', '—')}")
-    col_info2.info(f"**Fórmula:** `{item_edit.get('formula', '—')}`")
+    col_info2.info(f"**Fórmula:** `{formula_edit or '—'}`")
 
-    # Chaves de estado com namespace por indicador — evita colisão entre rerenders
-    k_cols = f"_map_cols_{nome_edit}"
-    k_termo = f"_map_termo_{nome_edit}"
-    k_tags = f"_map_tags_{nome_edit}"
+    # ── Extrai variáveis da fórmula (mesma lógica do algoritmo original) ──
+    TERMOS_IGNORAR = {'SOMA','MEDIA','SE','MAX','MIN','IF','AND','OR','NAN'}
+    parte_dir = formula_edit.split("=", 1)[1] if "=" in formula_edit else formula_edit
+    palavras = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*%?', parte_dir)
+    vars_formula = list(dict.fromkeys(
+        p for p in palavras if p.upper() not in TERMOS_IGNORAR
+    )) or ["VAR_UNICA"]
 
-    # Inicializa estado para este indicador se ainda não existe
+    # ── Estado por indicador (namespace) ──
+    k_var_tags = f"_vtags_{nome_edit}"   # dict: var_nome -> [tag, ...]
+    k_cols     = f"_cols_{nome_edit}"    # lista de tags encontradas na busca atual
+    k_termo    = f"_termo_{nome_edit}"   # termo buscado
+    k_var_ativa= f"_varativa_{nome_edit}"# variável que está recebendo tags agora
+
+    # Inicializa se não existir (ou restaura do mapeamento salvo)
+    if k_var_tags not in st.session_state:
+        # Restaura mapeamento var→tags já salvo, se houver
+        salvo = item_edit.get('var_tags', {})
+        if salvo:
+            st.session_state[k_var_tags] = {v: list(t) for v, t in salvo.items()}
+        else:
+            st.session_state[k_var_tags] = {v: [] for v in vars_formula}
     if k_cols not in st.session_state:
         st.session_state[k_cols] = []
     if k_termo not in st.session_state:
         st.session_state[k_termo] = ""
-    if k_tags not in st.session_state:
-        # Pré-carrega tags já salvas neste indicador
-        st.session_state[k_tags] = list(item_edit.get('tags', []))
+    if k_var_ativa not in st.session_state:
+        st.session_state[k_var_ativa] = vars_formula[0]
 
-    st.caption("💡 Busque e selecione as tags na ordem das variáveis da fórmula. Pode buscar várias vezes para acumular.")
+    var_tags = st.session_state[k_var_tags]
 
+    # Garante que novas variáveis extraídas da fórmula estejam no dict
+    for v in vars_formula:
+        if v not in var_tags:
+            var_tags[v] = []
+
+    st.markdown("#### 🔗 Vinculação Variável → Tag(s) PI")
+    st.caption("Para cada variável da fórmula, busque as tags correspondentes. Se houver múltiplas unidades (ex: TG11 e TG12), adicione uma tag por unidade para cada variável — o cálculo roda em paralelo.")
+
+    # ── Tabela de progresso das variáveis ──
+    prog_rows = []
+    for v in vars_formula:
+        tags_v = var_tags.get(v, [])
+        prog_rows.append({
+            "Variável": v,
+            "Tags vinculadas": ", ".join(tags_v) if tags_v else "—",
+            "N": len(tags_v)
+        })
+    st.dataframe(pd.DataFrame(prog_rows), use_container_width=True, hide_index=True)
+
+    # ── Seletor de variável ativa ──
+    var_ativa = st.selectbox(
+        "Variável a vincular agora:",
+        vars_formula,
+        index=vars_formula.index(st.session_state[k_var_ativa])
+              if st.session_state[k_var_ativa] in vars_formula else 0,
+        key=f"sel_var_ativa_{nome_edit}"
+    )
+    st.session_state[k_var_ativa] = var_ativa
+
+    # ── Busca de tags para a variável ativa ──
     col_t1, col_t2 = st.columns([4, 1])
     termo_tag = col_t1.text_input(
-        "Buscar tags (ex: Potencia, AberturaIGV, TG11):",
-        key=f"busca_tags_{nome_edit}",
+        f"Buscar tags para **{var_ativa}**:",
+        key=f"busca_{nome_edit}_{var_ativa}",
         placeholder="Digite e clique em Buscar →"
     )
     col_t2.write("")
     col_t2.write("")
-    if col_t2.button("🔍 Buscar", key=f"btn_busca_{nome_edit}"):
+    if col_t2.button("🔍 Buscar", key=f"btn_busca_{nome_edit}_{var_ativa}"):
         if termo_tag:
-            encontradas = [c for c in df_base.columns
-                           if normalizar(termo_tag) in normalizar(c)
-                           and ((df_base[c].isna().sum() + (df_base[c] == 0).sum()) / len(df_base)) < 0.99]
+            encontradas = [
+                c for c in df_base.columns
+                if normalizar(termo_tag) in normalizar(c)
+                and ((df_base[c].isna().sum() + (df_base[c] == 0).sum()) / len(df_base)) < 0.99
+            ]
             st.session_state[k_cols] = encontradas
             st.session_state[k_termo] = termo_tag
         else:
             st.session_state[k_cols] = []
+            st.session_state[k_termo] = ""
 
     cols_enc = st.session_state[k_cols]
     if cols_enc:
-        st.caption("✅ " + str(len(cols_enc)) + ' tag(s) para "' + st.session_state[k_termo] + '" — selecione e clique em Adicionar')
-        selecionadas_agora = st.multiselect(
+        st.caption(f"✅ {len(cols_enc)} tag(s) encontrada(s) — selecione e clique em Adicionar")
+        selecionadas = st.multiselect(
             "Tags encontradas:",
             cols_enc,
-            key=f"tags_enc_{nome_edit}"
+            key=f"tags_enc_{nome_edit}_{var_ativa}"
         )
-        if st.button("➕ Adicionar à seleção", key=f"btn_add_{nome_edit}"):
-            for t in selecionadas_agora:
-                if t not in st.session_state[k_tags]:
-                    st.session_state[k_tags].append(t)
+        if st.button(f"➕ Adicionar a [{var_ativa}]", key=f"btn_add_{nome_edit}_{var_ativa}"):
+            for t in selecionadas:
+                if t not in var_tags[var_ativa]:
+                    var_tags[var_ativa].append(t)
             st.session_state[k_cols] = []
+            st.session_state[k_termo] = ""
+            # Avança para próxima variável sem tags
+            sem_tags = [v for v in vars_formula if not var_tags.get(v)]
+            if sem_tags and sem_tags[0] != var_ativa:
+                st.session_state[k_var_ativa] = sem_tags[0]
             st.rerun()
-    elif st.session_state[k_termo] and not cols_enc:
-        st.warning("Nenhuma tag encontrada para " + repr(st.session_state[k_termo]) + ". Tente outro termo.")
+    elif st.session_state[k_termo]:
+        st.warning(f"Nenhuma tag encontrada para '{st.session_state[k_termo]}'. Tente outro termo.")
 
-    # Tags acumuladas — fonte de verdade é k_tags
-    tags_atuais = st.session_state[k_tags]
-    tags_sel = st.multiselect(
-        "🗂️ Tags vinculadas a este indicador (reordene se necessário):",
-        options=tags_atuais,
-        default=tags_atuais,
-        key=f"tags_final_{nome_edit}"
-    )
-    # Sincroniza remoções feitas no multiselect de volta para k_tags
-    if set(tags_sel) != set(tags_atuais) or tags_sel != tags_atuais:
-        st.session_state[k_tags] = tags_sel
-        st.rerun()
-
-    if tags_atuais:
-        if st.button("🗑️ Limpar tags", key=f"btn_clear_{nome_edit}"):
-            st.session_state[k_tags] = []
+    # ── Tags já vinculadas à variável ativa (editável) ──
+    tags_var_atual = var_tags.get(var_ativa, [])
+    if tags_var_atual:
+        st.caption(f"Tags de **{var_ativa}** (clique para remover):")
+        tags_editadas = st.multiselect(
+            f"Tags de {var_ativa}:",
+            options=tags_var_atual,
+            default=tags_var_atual,
+            key=f"tags_edit_{nome_edit}_{var_ativa}",
+            label_visibility="collapsed"
+        )
+        if tags_editadas != tags_var_atual:
+            var_tags[var_ativa] = tags_editadas
+            st.rerun()
+        if st.button(f"🗑️ Limpar tags de [{var_ativa}]", key=f"btn_clear_{nome_edit}_{var_ativa}"):
+            var_tags[var_ativa] = []
             st.rerun()
 
-    col_btn1, col_btn2 = st.columns([1, 4])
+    st.divider()
+
+    col_btn1, col_btn2 = st.columns([1, 3])
     with col_btn1:
         salvar = st.button("💾 Salvar", type="primary", key="btn_salvar_ind")
     with col_btn2:
         if st.button("🗑️ Remover este Indicador", key="btn_remover_ind"):
             del st.session_state['mapeamento'][nome_edit]
-            st.session_state['_map_ind_anterior'] = None
             st.rerun()
 
     if salvar:
-        tags_para_salvar = st.session_state.get(k_tags, [])
-        if not tags_para_salvar:
-            st.error("Selecione ao menos uma tag antes de salvar.")
+        # Valida: todas as variáveis precisam ter ao menos 1 tag
+        sem_tag = [v for v in vars_formula if not var_tags.get(v)]
+        if sem_tag:
+            st.error(f"Variáveis sem tag: **{', '.join(sem_tag)}**. Vincule ao menos 1 tag para cada.")
         else:
-            st.session_state['mapeamento'][nome_edit]['tags'] = tags_para_salvar
-            st.success(f"✅ Tags do indicador '{nome_edit}' salvas!")
-            # Avança automaticamente para o próximo indicador pendente
-            pendentes = [n for n, v in st.session_state['mapeamento'].items() if not v.get('tags')]
-            if pendentes:
-                prox = pendentes[0]
-                st.session_state['_ind_idx'] = nomes_existentes.index(prox)
-                st.session_state['_map_ind_anterior'] = None
-                st.info(f"➡️ Próximo pendente: **{prox}**")
+            # Verifica consistência: mesmo N de tags por variável (para o chunk funcionar)
+            ns = [len(var_tags[v]) for v in vars_formula]
+            if len(set(ns)) > 1:
+                st.warning(
+                    f"⚠️ As variáveis têm números diferentes de tags: "
+                    + ", ".join(f"{v}={len(var_tags[v])}" for v in vars_formula)
+                    + ". O cálculo usará o menor conjunto."
+                )
+            # Salva: var_tags (dict) e tags (lista flat, para compatibilidade)
+            tags_flat = []
+            for v in vars_formula:
+                tags_flat.extend(var_tags.get(v, []))
+            st.session_state['mapeamento'][nome_edit]['var_tags'] = dict(var_tags)
+            st.session_state['mapeamento'][nome_edit]['tags'] = tags_flat
+            st.session_state['mapeamento'][nome_edit]['vars_formula'] = vars_formula
+            st.success(f"✅ '{nome_edit}' salvo!")
+            # Avança para próximo pendente
+            pendentes = [n for n, v in st.session_state['mapeamento'].items()
+                         if not v.get('var_tags') or any(not vt for vt in v['var_tags'].values())]
+            if pendentes and pendentes[0] != nome_edit:
+                st.session_state['_ind_idx'] = nomes_existentes.index(pendentes[0])
             st.rerun()
 
 
@@ -916,7 +1011,8 @@ elif menu == "📊 4. Dashboard CEP":
                 st.warning("⚠️ Nenhuma tag válida encontrada na base atual.")
                 continue
 
-            resultados, erro = calcular_indicador(df_target, formula, tags_validas)
+            var_tags_map = item.get("var_tags")
+            resultados, erro = calcular_indicador(df_target, formula, tags_validas, var_tags=var_tags_map)
 
             if erro or not resultados:
                 # Fallback: plota as tags individuais
