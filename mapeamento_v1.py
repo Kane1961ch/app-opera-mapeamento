@@ -40,7 +40,7 @@ defaults = {
     'msg_sucesso': None,
     'pca_n_top': 10,
     '_lista_importada': [],
-    '_arquivo_lido': None, # Trava para não ler o Excel múltiplas vezes
+    '_arquivo_lido': None, # Trava para não ler o Excel múltiplas vezes (agora por hash)
     '_pca_cols': [],       # Inicializado para evitar KeyError
     '_pca_termo': "",      # Inicializado para evitar KeyError
     '_t2_cols': [],        # Inicializado para evitar KeyError
@@ -282,7 +282,6 @@ elif menu == "🧹 2. Limpeza Heurística":
         cols_enc = st.session_state['lim_cols_encontradas']
         if cols_enc:
             termo_atual = st.session_state["lim_termo_atual"]
-            # CORREÇÃO APLICADA AQUI: Usando as variáveis locais corretas
             st.caption(f"✅ {len(cols_enc)} tag(s) encontrada(s) para \"{termo_atual}\"")
             tags_sel = st.multiselect("2. Selecionar tags:", cols_enc, key="tags_lim_sel")
             
@@ -422,7 +421,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
 
     df_base = st.session_state['df_pi']
 
-    # CORREÇÃO APLICADA AQUI: Upload opcional de lista com lógica de Callback
+    # ---- Upload com detecção por hash de conteúdo ----
     with st.expander("📥 Importar Lista de Indicadores (Excel Opcional)", expanded=False):
         arquivo_ind = st.file_uploader(
             "Faça upload do arquivo lista_indicadores.xlsx",
@@ -431,30 +430,34 @@ elif menu == "📝 3. Mapeamento de Indicadores":
             help="Col E = Sigla, Col F = Descrição, Col G = Fórmula. Dados a partir da linha 10."
         )
 
-        if arquivo_ind and st.session_state.get('_arquivo_lido') != arquivo_ind.name:
-            try:
-                df_ind = pd.read_excel(arquivo_ind, sheet_name=0, header=None)
-                lista_importada = []
-                for idx in range(9, len(df_ind)):
-                    sigla = str(df_ind.iloc[idx, 4]).strip()
-                    if not sigla or sigla == "nan" or "BENCHMARK" in sigla.upper():
-                        continue
-                    descricao = str(df_ind.iloc[idx, 5]).strip()
-                    descricao = "" if descricao == "nan" else descricao
-                    formula   = str(df_ind.iloc[idx, 6]).strip()
-                    formula   = "" if formula == "nan" else formula
-                    lista_importada.append({
-                        "sigla":     sigla,
-                        "descricao": descricao,
-                        "formula":   formula,
-                    })
+        if arquivo_ind:
+            # Usa hash do conteúdo binário como trava — detecta arquivo novo mesmo com mesmo nome
+            conteudo_hash = hash(arquivo_ind.getvalue())
 
-                st.session_state['_lista_importada'] = lista_importada
-                st.session_state['_arquivo_lido'] = arquivo_ind.name # Trava de leitura
-                st.success(f"✅ {len(lista_importada)} indicadores encontrados.")
-                
-            except Exception as e:
-                st.error(f"Erro ao ler a planilha: {e}")
+            if st.session_state.get('_arquivo_lido') != conteudo_hash:
+                try:
+                    df_ind = pd.read_excel(arquivo_ind, sheet_name=0, header=None)
+                    lista_importada = []
+                    for idx in range(9, len(df_ind)):
+                        sigla = str(df_ind.iloc[idx, 4]).strip()
+                        if not sigla or sigla == "nan" or "BENCHMARK" in sigla.upper():
+                            continue
+                        descricao = str(df_ind.iloc[idx, 5]).strip()
+                        descricao = "" if descricao == "nan" else descricao
+                        formula   = str(df_ind.iloc[idx, 6]).strip()
+                        formula   = "" if formula == "nan" else formula
+                        lista_importada.append({
+                            "sigla":     sigla,
+                            "descricao": descricao,
+                            "formula":   formula,
+                        })
+
+                    st.session_state['_lista_importada'] = lista_importada
+                    st.session_state['_arquivo_lido'] = conteudo_hash  # ← hash, não nome
+                    st.success(f"✅ {len(lista_importada)} indicadores encontrados.")
+
+                except Exception as e:
+                    st.error(f"Erro ao ler a planilha: {e}")
 
         if st.session_state.get('_lista_importada'):
             st.dataframe(
@@ -477,7 +480,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
                 'tags':      [] if apagar_tags else tags_existentes
             }
         st.session_state['_lista_importada'] = []
-        st.session_state['_arquivo_lido'] = None
+        # Nota: _arquivo_lido é preservado intencionalmente para evitar releitura desnecessária
         st.session_state['msg_sucesso'] = f"✅ {n} indicador(es) carregado(s) com sucesso!"
 
     # Exibição dos botões baseada na lista armazenada
