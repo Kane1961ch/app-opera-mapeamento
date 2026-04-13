@@ -251,6 +251,7 @@ elif menu == "🧹 2. Limpeza Heurística":
         st.info("💡 Certifique-se de carregar a **base de dados PI** no Módulo 1, não a lista de indicadores.")
         st.stop()
 
+
     # ---- A. Limites específicos por variável ----
     st.subheader("A. Limites Específicos por Variável (Memória de Limites)")
 
