@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import re
 
 from core import (
     normalizar,
@@ -23,8 +24,6 @@ from core import (
     executar_pca,
     calcular_t2,
 )
-
-import re
 
 # ==========================================
 # 0. CONFIGURAÇÃO E ESTADO
@@ -41,12 +40,12 @@ defaults = {
     'msg_sucesso': None,
     'pca_n_top': 10,
     '_lista_importada': [],
-    '_pca_cols': [],
-    '_pca_termo': "",
-    '_t2_cols': [],
-    '_t2_termo': "",
+    '_arquivo_lido': None, # Trava para não ler o Excel múltiplas vezes (agora por hash)
+    '_pca_cols': [],       # Inicializado para evitar KeyError
+    '_pca_termo': "",      # Inicializado para evitar KeyError
+    '_t2_cols': [],        # Inicializado para evitar KeyError
+    '_t2_termo': "",       # Inicializado para evitar KeyError
 }
-
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -172,7 +171,6 @@ if menu == "📂 1. Carga e Auditoria":
                     # Para cada clone, identifica o original correspondente
                     rows_clone = []
                     for clone in tags_clonadas:
-                        # Compara com todas as tags originais para achar a fonte
                         for orig in df_audit.columns[mascara_original]:
                             if df_audit[clone].equals(df_audit[orig]):
                                 rows_clone.append({"Original (manter)": orig, "Clone (remover)": clone})
@@ -256,12 +254,10 @@ elif menu == "🧹 2. Limpeza Heurística":
         st.info("💡 Certifique-se de carregar a **base de dados PI** no Módulo 1, não a lista de indicadores.")
         st.stop()
 
-
     # ---- A. Limites específicos por variável ----
     st.subheader("A. Limites Específicos por Variável (Memória de Limites)")
 
     with st.expander("➕ Adicionar / Gerenciar Regras de Limite", expanded=False):
-        # --- Inicializa estado da busca ---
         if 'lim_cols_encontradas' not in st.session_state:
             st.session_state['lim_cols_encontradas'] = []
         if 'lim_termo_atual' not in st.session_state:
@@ -286,10 +282,9 @@ elif menu == "🧹 2. Limpeza Heurística":
         cols_enc = st.session_state['lim_cols_encontradas']
         if cols_enc:
             termo_atual = st.session_state["lim_termo_atual"]
-            # Alterado para usar as variáveis locais corretas (cols_enc e termo_atual)
             st.caption(f"✅ {len(cols_enc)} tag(s) encontrada(s) para \"{termo_atual}\"")
             tags_sel = st.multiselect("2. Selecionar tags:", cols_enc, key="tags_lim_sel")
-
+            
             if tags_sel:
                 cA, cB = st.columns(2)
                 v_min = cA.number_input("Mínimo", value=0.0, key="vmin_lim")
@@ -302,7 +297,6 @@ elif menu == "🧹 2. Limpeza Heurística":
                         'minimo': v_min if usar_min else None,
                         'maximo': v_max if usar_max else None
                     })
-                    # Limpa a busca após salvar
                     st.session_state['lim_cols_encontradas'] = []
                     st.session_state['lim_termo_atual'] = ""
                     st.success(f"✅ Regra salva para {len(tags_sel)} tag(s)!")
@@ -327,9 +321,8 @@ elif menu == "🧹 2. Limpeza Heurística":
         "Todas as demais variáveis passam sem qualquer alteração."
     )
 
-    cfg = {}  # Não há parâmetros globais — apenas regras específicas por tag
+    cfg = {} 
 
-    # Mostra estado atual da base
     if st.session_state['df_limpo'] is not None:
         n_regras = len(st.session_state.get('limites_customizados', []))
         tags_ja_filtradas = sum(
@@ -357,8 +350,6 @@ elif menu == "🧹 2. Limpeza Heurística":
 
     if aplicar:
         with st.spinner("Aplicando filtros de engenharia..."):
-            # Aplica sempre sobre a base original (df_pi) com TODAS as regras acumuladas
-            # Isso garante que regras não se sobrepõem de forma inesperada
             base_referencia = st.session_state['df_pi']
             tags_validas = list(base_referencia.columns)
             df_limpo = gerar_dataframe_limpo(
@@ -370,7 +361,6 @@ elif menu == "🧹 2. Limpeza Heurística":
             n_tags_regra = sum(len(r['tags']) for r in st.session_state.get('limites_customizados', []))
             st.success(f"✅ Aplicado! **{n_tags_regra}** tag(s) com regra, {len(tags_validas) - n_tags_regra} em pass-through.")
 
-            # Mostra apenas as tags que tiveram regra aplicada
             limites_cfg_ui = {}
             for regra in st.session_state.get('limites_customizados', []):
                 for tag in regra['tags']:
@@ -405,7 +395,6 @@ elif menu == "🧹 2. Limpeza Heurística":
                 except Exception:
                     st.warning("Não foi possível gerar tabela comparativa.")
 
-                # Amostra visual da primeira tag filtrada
                 st.write(f"### 📈 Amostra Visual — {tags_filtradas[0]}")
                 ptag = tags_filtradas[0]
                 df_antes_ptag = df_base[ptag].apply(pd.to_numeric) if hasattr(df_base[ptag], 'apply') else pd.to_numeric(df_base[ptag], errors='coerce')
@@ -432,7 +421,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
 
     df_base = st.session_state['df_pi']
 
-    # Upload opcional de lista de indicadores (lista_indicadores.xlsx)
+    # ---- Upload com detecção por hash de conteúdo ----
     with st.expander("📥 Importar Lista de Indicadores (Excel Opcional)", expanded=False):
         arquivo_ind = st.file_uploader(
             "Faça upload do arquivo lista_indicadores.xlsx",
@@ -442,60 +431,70 @@ elif menu == "📝 3. Mapeamento de Indicadores":
         )
 
         if arquivo_ind:
-            try:
-                df_ind = pd.read_excel(arquivo_ind, sheet_name=0, header=None)
-                lista_importada = []
-                for idx in range(9, len(df_ind)):
-                    sigla = str(df_ind.iloc[idx, 4]).strip()
-                    if not sigla or sigla == "nan" or "BENCHMARK" in sigla.upper():
-                        continue
-                    descricao = str(df_ind.iloc[idx, 5]).strip()
-                    descricao = "" if descricao == "nan" else descricao
-                    formula   = str(df_ind.iloc[idx, 6]).strip()
-                    formula   = "" if formula == "nan" else formula
-                    lista_importada.append({
-                        "sigla":     sigla,
-                        "descricao": descricao,
-                        "formula":   formula,
-                    })
+            # Usa hash do conteúdo binário como trava — detecta arquivo novo mesmo com mesmo nome
+            conteudo_hash = hash(arquivo_ind.getvalue())
 
-                # Guarda no session_state para sobreviver ao rerender do botão
-                st.session_state['_lista_importada'] = lista_importada
+            if st.session_state.get('_arquivo_lido') != conteudo_hash:
+                try:
+                    df_ind = pd.read_excel(arquivo_ind, sheet_name=0, header=None)
+                    lista_importada = []
+                    for idx in range(9, len(df_ind)):
+                        sigla = str(df_ind.iloc[idx, 4]).strip()
+                        if not sigla or sigla == "nan" or "BENCHMARK" in sigla.upper():
+                            continue
+                        descricao = str(df_ind.iloc[idx, 5]).strip()
+                        descricao = "" if descricao == "nan" else descricao
+                        formula   = str(df_ind.iloc[idx, 6]).strip()
+                        formula   = "" if formula == "nan" else formula
+                        lista_importada.append({
+                            "sigla":     sigla,
+                            "descricao": descricao,
+                            "formula":   formula,
+                        })
 
-                st.success(f"✅ {len(lista_importada)} indicadores encontrados.")
-                st.dataframe(
-                    pd.DataFrame(lista_importada).rename(columns={
-                        "sigla": "Sigla", "descricao": "Descrição", "formula": "Fórmula"
-                    }),
-                    use_container_width=True,
-                    height=250
-                )
-            except Exception as e:
-                st.error(f"Erro ao ler a planilha: {e}")
+                    st.session_state['_lista_importada'] = lista_importada
+                    st.session_state['_arquivo_lido'] = conteudo_hash  # ← hash, não nome
+                    st.success(f"✅ {len(lista_importada)} indicadores encontrados.")
 
-        # Botão fora do bloco `if arquivo_ind` para funcionar mesmo após rerender
+                except Exception as e:
+                    st.error(f"Erro ao ler a planilha: {e}")
+
         if st.session_state.get('_lista_importada'):
-            n = len(st.session_state['_lista_importada'])
-            col_load1, col_load2 = st.columns(2)
-            with col_load1:
-                btn_carregar = st.button(f"✅ Carregar {n} indicadores (preserva tags já salvas)", key="btn_precarregar")
-            with col_load2:
-                btn_recarregar = st.button(f"🔄 Recarregar do zero (apaga tags)", key="btn_recarregar")
+            st.dataframe(
+                pd.DataFrame(st.session_state['_lista_importada']).rename(columns={
+                    "sigla": "Sigla", "descricao": "Descrição", "formula": "Fórmula"
+                }),
+                use_container_width=True,
+                height=250
+            )
 
-            if btn_carregar or btn_recarregar:
-                for item in st.session_state['_lista_importada']:
-                    chave = item['sigla']
-                    # Sempre atualiza sigla/descrição/fórmula com os dados novos da planilha
-                    # Preserva tags já mapeadas apenas no btn_carregar
-                    tags_existentes = st.session_state['mapeamento'].get(chave, {}).get('tags', [])
-                    st.session_state['mapeamento'][chave] = {
-                        'descricao': item['descricao'],
-                        'formula':   item['formula'],
-                        'tags':      [] if btn_recarregar else tags_existentes
-                    }
-                st.session_state['_lista_importada'] = []
-                st.success(f"✅ {n} indicador(es) carregado(s) com sucesso!")
-                st.rerun()
+    # Exibição dos botões baseada na lista armazenada
+    # Usamos botões normais (não on_click) para poder chamar st.rerun() logo após,
+    # garantindo que a tabela "Indicadores Mapeados" abaixo reflita o novo estado.
+    if st.session_state.get('_lista_importada'):
+        n = len(st.session_state['_lista_importada'])
+        col_load1, col_load2 = st.columns(2)
+        with col_load1:
+            btn_carregar = st.button(f"✅ Carregar {n} indicadores (preserva tags)", key="btn_precarregar")
+        with col_load2:
+            btn_recarregar = st.button(f"🔄 Recarregar do zero (apaga tags)", key="btn_recarregar")
+
+        if btn_carregar or btn_recarregar:
+            apagar_tags = bool(btn_recarregar)
+            for item in st.session_state['_lista_importada']:
+                chave = item['sigla']
+                tags_existentes = st.session_state['mapeamento'].get(chave, {}).get('tags', [])
+                var_tags_existentes = st.session_state['mapeamento'].get(chave, {}).get('var_tags', {})
+                st.session_state['mapeamento'][chave] = {
+                    'descricao': item['descricao'],
+                    'formula':   item['formula'],
+                    'tags':      [] if apagar_tags else tags_existentes,
+                    'var_tags':  {} if apagar_tags else var_tags_existentes,
+                }
+            st.session_state['_lista_importada'] = []
+            # _arquivo_lido preservado para evitar releitura desnecessária
+            st.session_state['msg_sucesso'] = f"✅ {n} indicador(es) carregado(s) com sucesso!"
+            st.rerun()  # ← força atualização da tabela abaixo
 
     # Normaliza dados antigos no mapeamento (garante que todos têm 'descricao' e 'formula' separados)
     for _chave, _item in st.session_state['mapeamento'].items():
@@ -543,11 +542,8 @@ elif menu == "📝 3. Mapeamento de Indicadores":
         st.info("Importe a lista de indicadores acima primeiro.")
         st.stop()
 
-    # Selectbox para escolher qual indicador editar
-    # Inicializa índice selecionado no session_state para persistir entre rerenders
     if '_ind_idx' not in st.session_state:
         st.session_state['_ind_idx'] = 0
-    # Ajusta se a lista mudou de tamanho
     if st.session_state['_ind_idx'] >= len(nomes_existentes):
         st.session_state['_ind_idx'] = 0
 
@@ -557,18 +553,39 @@ elif menu == "📝 3. Mapeamento de Indicadores":
         index=st.session_state['_ind_idx'],
         key="sel_nome_edit"
     )
-    # Atualiza índice ao mudar seleção
     st.session_state['_ind_idx'] = nomes_existentes.index(nome_edit)
 
     item_edit = st.session_state['mapeamento'][nome_edit]
-    formula_edit = item_edit.get('formula', '')
 
-    # Mostra descrição e fórmula do indicador selecionado (somente leitura)
+    # ── Campos editáveis de Descrição e Fórmula ──
     col_info1, col_info2 = st.columns(2)
-    col_info1.info(f"**Descrição:** {item_edit.get('descricao', '—')}")
-    col_info2.info(f"**Fórmula:** `{formula_edit or '—'}`")
+    nova_descricao = col_info1.text_input(
+        "Descrição:",
+        value=item_edit.get('descricao', ''),
+        key=f"desc_edit_{nome_edit}"
+    )
+    nova_formula = col_info2.text_input(
+        "Fórmula (editável):",
+        value=item_edit.get('formula', ''),
+        key=f"formula_edit_{nome_edit}",
+        help="Edite a fórmula aqui. As variáveis serão reextraídas automaticamente."
+    )
 
-    # ── Extrai variáveis da fórmula (mesma lógica do algoritmo original) ──
+    # Aplica edições inline no mapeamento sem precisar clicar em Salvar
+    if nova_descricao != item_edit.get('descricao', ''):
+        st.session_state['mapeamento'][nome_edit]['descricao'] = nova_descricao
+
+    formula_mudou = nova_formula != item_edit.get('formula', '')
+    if formula_mudou:
+        st.session_state['mapeamento'][nome_edit]['formula'] = nova_formula
+        # Limpa vinculações de variáveis antigas pois as vars podem ter mudado
+        k_var_tags_reset = f"_vtags_{nome_edit}"
+        if k_var_tags_reset in st.session_state:
+            del st.session_state[k_var_tags_reset]
+        st.rerun()
+
+    formula_edit = nova_formula
+
     TERMOS_IGNORAR = {'SOMA','MEDIA','SE','MAX','MIN','IF','AND','OR','NAN'}
     parte_dir = formula_edit.split("=", 1)[1] if "=" in formula_edit else formula_edit
     palavras = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*%?', parte_dir)
@@ -576,15 +593,12 @@ elif menu == "📝 3. Mapeamento de Indicadores":
         p for p in palavras if p.upper() not in TERMOS_IGNORAR
     )) or ["VAR_UNICA"]
 
-    # ── Estado por indicador (namespace) ──
-    k_var_tags = f"_vtags_{nome_edit}"   # dict: var_nome -> [tag, ...]
-    k_cols     = f"_cols_{nome_edit}"    # lista de tags encontradas na busca atual
-    k_termo    = f"_termo_{nome_edit}"   # termo buscado
-    k_var_ativa= f"_varativa_{nome_edit}"# variável que está recebendo tags agora
+    k_var_tags = f"_vtags_{nome_edit}"
+    k_cols     = f"_cols_{nome_edit}"
+    k_termo    = f"_termo_{nome_edit}"
+    k_var_ativa= f"_varativa_{nome_edit}"
 
-    # Inicializa se não existir (ou restaura do mapeamento salvo)
     if k_var_tags not in st.session_state:
-        # Restaura mapeamento var→tags já salvo, se houver
         salvo = item_edit.get('var_tags', {})
         if salvo:
             st.session_state[k_var_tags] = {v: list(t) for v, t in salvo.items()}
@@ -599,7 +613,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
 
     var_tags = st.session_state[k_var_tags]
 
-    # Garante que novas variáveis extraídas da fórmula estejam no dict
     for v in vars_formula:
         if v not in var_tags:
             var_tags[v] = []
@@ -607,7 +620,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     st.markdown("#### 🔗 Vinculação Variável → Tag(s) PI")
     st.caption("Para cada variável da fórmula, busque as tags correspondentes. Se houver múltiplas unidades (ex: TG11 e TG12), adicione uma tag por unidade para cada variável — o cálculo roda em paralelo.")
 
-    # ── Tabela de progresso das variáveis ──
     prog_rows = []
     for v in vars_formula:
         tags_v = var_tags.get(v, [])
@@ -618,7 +630,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
         })
     st.dataframe(pd.DataFrame(prog_rows), use_container_width=True, hide_index=True)
 
-    # ── Seletor de variável ativa ──
     var_ativa = st.selectbox(
         "Variável a vincular agora:",
         vars_formula,
@@ -628,7 +639,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     )
     st.session_state[k_var_ativa] = var_ativa
 
-    # ── Busca de tags para a variável ativa ──
     col_t1, col_t2 = st.columns([4, 1])
     termo_tag = col_t1.text_input(
         f"Buscar tags para **{var_ativa}**:",
@@ -664,7 +674,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
                     var_tags[var_ativa].append(t)
             st.session_state[k_cols] = []
             st.session_state[k_termo] = ""
-            # Avança para próxima variável sem tags
             sem_tags = [v for v in vars_formula if not var_tags.get(v)]
             if sem_tags and sem_tags[0] != var_ativa:
                 st.session_state[k_var_ativa] = sem_tags[0]
@@ -672,7 +681,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
     elif st.session_state[k_termo]:
         st.warning(f"Nenhuma tag encontrada para '{st.session_state[k_termo]}'. Tente outro termo.")
 
-    # ── Tags já vinculadas à variável ativa (editável) ──
     tags_var_atual = var_tags.get(var_ativa, [])
     if tags_var_atual:
         st.caption(f"Tags de **{var_ativa}** (clique para remover):")
@@ -701,12 +709,10 @@ elif menu == "📝 3. Mapeamento de Indicadores":
             st.rerun()
 
     if salvar:
-        # Valida: todas as variáveis precisam ter ao menos 1 tag
         sem_tag = [v for v in vars_formula if not var_tags.get(v)]
         if sem_tag:
             st.error(f"Variáveis sem tag: **{', '.join(sem_tag)}**. Vincule ao menos 1 tag para cada.")
         else:
-            # Verifica consistência: mesmo N de tags por variável (para o chunk funcionar)
             ns = [len(var_tags[v]) for v in vars_formula]
             if len(set(ns)) > 1:
                 st.warning(
@@ -714,7 +720,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
                     + ", ".join(f"{v}={len(var_tags[v])}" for v in vars_formula)
                     + ". O cálculo usará o menor conjunto."
                 )
-            # Salva: var_tags (dict) e tags (lista flat, para compatibilidade)
             tags_flat = []
             for v in vars_formula:
                 tags_flat.extend(var_tags.get(v, []))
@@ -722,7 +727,6 @@ elif menu == "📝 3. Mapeamento de Indicadores":
             st.session_state['mapeamento'][nome_edit]['tags'] = tags_flat
             st.session_state['mapeamento'][nome_edit]['vars_formula'] = vars_formula
             st.success(f"✅ '{nome_edit}' salvo!")
-            # Avança para próximo pendente
             pendentes = [n for n, v in st.session_state['mapeamento'].items()
                          if not v.get('var_tags') or any(not vt for vt in v['var_tags'].values())]
             if pendentes and pendentes[0] != nome_edit:
@@ -779,7 +783,6 @@ elif menu == "📊 4. Dashboard CEP":
             resultados, erro = calcular_indicador(df_target, formula, tags_validas, var_tags=var_tags_map)
 
             if erro or not resultados:
-                # Fallback: plota as tags individuais
                 st.warning(f"⚠️ Não foi possível calcular a fórmula ({erro}). Exibindo tags brutas.")
                 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
                 for tag in tags_validas:
@@ -823,7 +826,6 @@ elif menu == "📊 4. Dashboard CEP":
                 if desvio > 0:
                     axes[i, 0].axhline(lsc, linestyle='--', color='red', label='LSC (3σ)')
                     axes[i, 0].axhline(lic, linestyle='--', color='red', label='LIC (3σ)')
-                    # Pontos fora de controle
                     fora = serie[(serie > lsc) | (serie < lic)]
                     axes[i, 0].scatter(fora.index, fora.values, color='red', s=20, zorder=5)
                 axes[i, 0].set_title(f"[{maq}] Carta de Controle — {nome_ind}", fontweight='bold')
@@ -869,7 +871,6 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
     with tab1:
         st.subheader("Análise de Componentes Principais (PCA)")
 
-        # Estado persistente da busca PCA
         if '_pca_cols' not in st.session_state:
             st.session_state['_pca_cols'] = []
         if '_pca_termo' not in st.session_state:
@@ -966,7 +967,6 @@ elif menu == "🧪 5. Análise Avançada (PCA / T²)":
     with tab2:
         st.subheader("Carta T² de Hotelling (Controle Multivariado)")
 
-        # Estado persistente da busca T²
         if '_t2_cols' not in st.session_state:
             st.session_state['_t2_cols'] = []
         if '_t2_termo' not in st.session_state:
