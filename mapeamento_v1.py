@@ -41,7 +41,12 @@ defaults = {
     'msg_sucesso': None,
     'pca_n_top': 10,
     '_lista_importada': [],
+    '_pca_cols': [],
+    '_pca_termo': "",
+    '_t2_cols': [],
+    '_t2_termo': "",
 }
+
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -281,9 +286,10 @@ elif menu == "🧹 2. Limpeza Heurística":
         cols_enc = st.session_state['lim_cols_encontradas']
         if cols_enc:
             termo_atual = st.session_state["lim_termo_atual"]
-            termo_atual_pca = st.session_state["_pca_termo"]
-            st.caption(f"\u2705 {len(cols_pca_encontradas)} tag(s) encontrada(s) para \"{termo_atual_pca}\"")
+            # Alterado para usar as variáveis locais corretas (cols_enc e termo_atual)
+            st.caption(f"✅ {len(cols_enc)} tag(s) encontrada(s) para \"{termo_atual}\"")
             tags_sel = st.multiselect("2. Selecionar tags:", cols_enc, key="tags_lim_sel")
+
             if tags_sel:
                 cA, cB = st.columns(2)
                 v_min = cA.number_input("Mínimo", value=0.0, key="vmin_lim")
