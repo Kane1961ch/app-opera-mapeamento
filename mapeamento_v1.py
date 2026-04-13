@@ -86,7 +86,7 @@ if menu == "📂 1. Carga e Auditoria":
                     df.index = pd.to_datetime(df.index, errors="coerce")
                 st.session_state["df_pi"] = df
                 st.success(f"✅ Base carregada: **{df.shape[0]}** instantes × **{df.shape[1]}** tags.")
-                st.dataframe(df.head(5), use_container_width=True)
+                st.dataframe(df.head(5), width="stretch")
             except Exception as e:
                 st.error(f"❌ Erro ao carregar PKL: {e}")
 
@@ -108,7 +108,7 @@ if menu == "📂 1. Carga e Auditoria":
 
             if df_novo is not None:
                 st.success(f"✅ Processamento concluído: **{df_novo.shape[0]}** instantes × **{df_novo.shape[1]}** tags ativas.")
-                st.dataframe(df_novo.head(5), use_container_width=True)
+                st.dataframe(df_novo.head(5), width="stretch")
 
                 # Download do pkl gerado
                 import io, pickle
@@ -178,7 +178,7 @@ if menu == "📂 1. Carga e Auditoria":
                         else:
                             rows_clone.append({"Original (manter)": "—", "Clone (remover)": clone})
 
-                    st.dataframe(pd.DataFrame(rows_clone), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(rows_clone), width="stretch", hide_index=True)
 
                     # Adiciona clones à lista de remoção
                     if tags_clonadas not in [st.session_state.get('lixo_para_remover', [])]:
@@ -213,7 +213,7 @@ if menu == "📂 1. Carga e Auditoria":
                         pares.sort(key=lambda x: x[2], reverse=True)
                         df_pares = pd.DataFrame(pares, columns=["Sensor A (Manter)", "Sensor B (Remover)", "Correlação"])
                         st.error(f"🚨 {len(pares)} pares redundantes detectados!")
-                        st.dataframe(df_pares, use_container_width=True)
+                        st.dataframe(df_pares, width="stretch")
                         st.session_state['lixo_para_remover'] = list(set([p[1] for p in pares]))
                     else:
                         st.success(f"✅ Nenhum par ultrapassou {limiar*100:.0f}% de correlação.")
@@ -307,7 +307,7 @@ elif menu == "🧹 2. Limpeza Heurística":
     if st.session_state['limites_customizados']:
         st.markdown("**Regras ativas:**")
         df_regras = pd.DataFrame(st.session_state['limites_customizados'])
-        st.dataframe(df_regras, use_container_width=True)
+        st.dataframe(df_regras, width="stretch")
         if st.button("🗑️ Limpar Todas as Regras", key="btn_limpar_regras"):
             st.session_state['limites_customizados'] = []
             st.rerun()
@@ -391,7 +391,7 @@ elif menu == "🧹 2. Limpeza Heurística":
                         return "[" + ", ".join(partes) + "]"
 
                     comparativo.insert(0, "Regra", [descr_regra(t) for t in comparativo.index])
-                    st.dataframe(comparativo, use_container_width=True)
+                    st.dataframe(comparativo, width="stretch")
                 except Exception:
                     st.warning("Não foi possível gerar tabela comparativa.")
 
@@ -464,7 +464,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
                 pd.DataFrame(st.session_state['_lista_importada']).rename(columns={
                     "sigla": "Sigla", "descricao": "Descrição", "formula": "Fórmula"
                 }),
-                use_container_width=True,
+                width="stretch",
                 height=250
             )
 
@@ -521,7 +521,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
                 "Tags":       ", ".join(item.get('tags', [])),
                 "Status":     status
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch")
 
         col_cl1, col_cl2 = st.columns([1, 4])
         with col_cl1:
@@ -628,7 +628,7 @@ elif menu == "📝 3. Mapeamento de Indicadores":
             "Tags vinculadas": ", ".join(tags_v) if tags_v else "—",
             "N": len(tags_v)
         })
-    st.dataframe(pd.DataFrame(prog_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(prog_rows), width="stretch", hide_index=True)
 
     var_ativa = st.selectbox(
         "Variável a vincular agora:",
@@ -849,7 +849,7 @@ elif menu == "📊 4. Dashboard CEP":
             plt.close(fig)
 
             if metricas_globais:
-                st.dataframe(pd.DataFrame(metricas_globais), use_container_width=True)
+                st.dataframe(pd.DataFrame(metricas_globais), width="stretch")
 
 
 # ==========================================
